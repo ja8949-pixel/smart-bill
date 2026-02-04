@@ -96,7 +96,7 @@ export default function BillApp() {
                   }
                 }} />
                 <button onClick={() => fileInputRef.current?.click()} className="w-full text-xs bg-gray-50 border border-dashed border-gray-300 py-3 rounded-xl font-bold hover:bg-gray-100 transition text-gray-500">
-                  {stampImage ? "도장 교체하기" : "도장 파일 업로드"}
+                  {stampImage ? "도장 교체하기" : "도장파일 업로드"}
                 </button>
               </div>
             </section>
