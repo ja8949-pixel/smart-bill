@@ -25,41 +25,46 @@ export default function BillApp() {
   const [items, setItems] = useState<BillItem[]>([{ id: Date.now(), name: '', spec: '', count: 1, price: 0 }]);
   const [stampImage, setStampImage] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [showAdModal, setShowAdModal] = useState(false); // [추가] 광고 팝업 상태
   
   const printRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const totalAmount = items.reduce((acc, cur) => acc + (cur.price * cur.count), 0);
 
-  // [GA4 공통 추적 함수]
   const trackEvent = (eventName: string, params?: object) => {
     if (typeof window !== 'undefined' && (window as any).gtag) {
       (window as any).gtag('event', eventName, params);
-      console.log(`GA4 Event: ${eventName}`, params); // 디버깅용 로그
+      console.log(`GA4 Event: ${eventName}`, params);
     }
   };
 
-  const saveAsJpg = () => {
-    trackEvent('click_download', { type: 'jpg', customer: info.customer }); // JPG 다운로드 추적
+  // [수정] 실제 다운로드 실행 로직
+  const executeDownload = () => {
+    trackEvent('click_download_confirm', { type: 'jpg', customer: info.customer });
     if (printRef.current === null) return;
+    
     toJpeg(printRef.current, { quality: 0.95, backgroundColor: '#ffffff' })
       .then((dataUrl) => {
         const link = document.createElement('a');
         link.download = `견적서_${info.customer || "미지정"}.jpg`;
         link.href = dataUrl;
         link.click();
+        setShowAdModal(false); // 다운로드 시작 후 팝업 닫기
       })
       .catch((err) => console.error('JPG 저장 실패:', err));
   };
 
   const addItem = () => {
-    trackEvent('bill_add_item'); // 항목 추가 버튼 추적
+    trackEvent('bill_add_item');
     setItems([...items, { id: Date.now(), name: '', spec: '', count: 1, price: 0 }]);
   };
 
   const updateItem = (id: number, key: keyof BillItem, value: any) => {
     setItems(items.map(i => i.id === id ? { ...i, [key]: value } : i));
   };
+
+  const coupangDynamicUrl = "https://ads-partners.coupang.com/widgets.html?id=963189&template=carousel&trackingCode=AF4084126&subId=&width=360&height=180&tsource=";
 
   return (
     <div className="min-h-screen bg-gray-100 font-sans text-slate-900 pb-10">
@@ -72,7 +77,7 @@ export default function BillApp() {
           <button 
             onClick={() => {
               setShowPreview(true);
-              trackEvent('click_preview_top'); // 상단 미리보기 버튼 추적
+              trackEvent('click_preview_top');
             }} 
             className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold text-sm shadow-lg hover:bg-blue-700 transition"
           >
@@ -80,28 +85,59 @@ export default function BillApp() {
           </button>
         </header>
 
-        {/* [상단 광고 영역] */}
+        {/* 상단 쿠팡 배너 */}
         <div 
-          className="max-w-7xl mx-auto mt-4 px-4 flex flex-col items-center bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm cursor-pointer"
+          className="max-w-4xl mx-auto mt-4 px-4 flex flex-col items-center bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm"
           onClick={() => trackEvent('ad_click', { location: 'top_banner' })}
         >
-          <iframe src="https://coupa.ng/clwE9U" width="100%" height="300" style={{ border: 'none' }} scrolling="no" referrerPolicy="unsafe-url"></iframe>
+          <iframe 
+            src={coupangDynamicUrl} 
+            width="580" 
+            height="180" 
+            frameBorder="0" 
+            scrolling="no" 
+            referrerPolicy="unsafe-url"
+          ></iframe>
           <p className="text-[9px] text-gray-400 mt-1">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
         </div>
 
+        {/* 상단 텐핑 배너 */}
+        <div 
+          className="max-w-4xl mx-auto mt-4 px-4 flex flex-col items-center bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm overflow-hidden cursor-pointer"
+          onClick={() => trackEvent('ad_click_tenping', { location: 'top_banner_tenping' })}
+        >
+          <div className="w-full flex items-center bg-white h-[100px]">
+            <div className="flex-shrink-0 w-[80px] h-[80px] ml-4 overflow-hidden rounded-xl border border-gray-100">
+              <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noopener noreferrer">
+                <img 
+                  src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Squa_20251117151015.jpg?RS=170x170" 
+                  alt="메디콕" 
+                  className="w-full h-full object-cover"
+                />
+              </a>
+            </div>
+            <div className="flex-1 px-4 text-left">
+              <p className="text-blue-500 text-[10px] font-bold">광고 클릭 한번이 무료 서비스 운영에 큰 힘이 됩니다 ♡</p>
+              <h3 className="text-sm md:text-lg font-black text-slate-800 leading-tight">
+                의사가 설계한 맞춤형 건강기능식품 메디콕!
+              </h3>
+            </div>
+          </div>
+          <p className="text-[9px] text-gray-400 mt-1">이 광고는 서비스 운영을 위한 후원을 포함하고 있습니다.</p>
+        </div>
+
         <main className="max-w-7xl mx-auto p-4 flex flex-col lg:flex-row gap-6">
-          {/* [좌측 사이드 광고] */}
-          <aside className="hidden xl:flex w-[150px] flex-col items-center gap-4">
+          <aside className="hidden xl:flex w-[180px] flex-col items-center gap-4">
             <div 
-              className="sticky top-24 w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200 cursor-pointer"
+              className="sticky top-24 w-full flex flex-col items-center bg-white p-2 rounded-2xl border border-zinc-200"
               onClick={() => trackEvent('ad_click', { location: 'left_sidebar' })}
             >
-              <iframe src="https://coupa.ng/clwFcc" width="100%" height="300" style={{ border: 'none' }} scrolling="no" referrerPolicy="unsafe-url"></iframe>
-              <p className="text-[10px] text-gray-400 leading-tight mt-3 text-center font-medium italic">Partner's AD</p>
+              <iframe src={coupangDynamicUrl} width="120" height="400" frameBorder="0" scrolling="no" referrerPolicy="unsafe-url"></iframe>
+              <p className="text-[10px] text-gray-400 leading-tight mt-2 text-center font-medium italic">Partner's AD</p>
             </div>
           </aside>
 
-          <div className="flex-1 space-y-6">
+          <div className="flex-1 space-y-6 text-left">
             <section className="bg-white rounded-2xl p-5 shadow-sm space-y-4 border border-zinc-200">
               <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">사업자 정보</h2>
               <div className="grid grid-cols-2 gap-3">
@@ -120,7 +156,7 @@ export default function BillApp() {
                     const reader = new FileReader();
                     reader.onloadend = () => setStampImage(reader.result as string);
                     reader.readAsDataURL(file);
-                    trackEvent('upload_stamp'); // 도장 업로드 추적
+                    trackEvent('upload_stamp');
                   }
                 }} />
                 <button onClick={() => fileInputRef.current?.click()} className="w-full text-xs bg-gray-50 border border-dashed border-gray-300 py-3 rounded-xl font-bold hover:bg-gray-100 transition text-gray-500">
@@ -145,7 +181,7 @@ export default function BillApp() {
                   <button onClick={() => {
                     if(items.length > 1) {
                       setItems(items.filter(i => i.id !== item.id));
-                      trackEvent('bill_remove_item'); // 항목 삭제 추적
+                      trackEvent('bill_remove_item');
                     }
                   }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500">✕</button>
                 </div>
@@ -157,24 +193,22 @@ export default function BillApp() {
               <textarea className="w-full bg-gray-50 rounded-xl p-3 text-sm outline-none h-20 focus:ring-1 focus:ring-blue-500" placeholder="추가 기재사항을 작성해주세요." onChange={e => setInfo({...info, remark: e.target.value})} />
             </section>
 
-            {/* [하단 광고 영역] */}
             <div 
-              className="w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm cursor-pointer"
+              className="w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm"
               onClick={() => trackEvent('ad_click', { location: 'bottom_banner' })}
             >
-              <iframe src="https://coupa.ng/clwFfO" width="100%" height="300" style={{ border: 'none' }} scrolling="no" referrerPolicy="unsafe-url"></iframe>
+              <iframe src={coupangDynamicUrl} width="380" height="180" frameBorder="0" scrolling="no" referrerPolicy="unsafe-url"></iframe>
               <p className="text-[9px] text-gray-400 mt-1 italic">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
             </div>
           </div>
 
-          {/* [우측 사이드 광고] */}
-          <aside className="w-full lg:w-[150px] flex flex-col items-center gap-4">
+          <aside className="w-full lg:w-[180px] flex flex-col items-center gap-4">
             <div 
-              className="lg:sticky lg:top-24 w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200 cursor-pointer"
+              className="lg:sticky lg:top-24 w-full flex flex-col items-center bg-white p-2 rounded-2xl border border-zinc-200"
               onClick={() => trackEvent('ad_click', { location: 'right_sidebar' })}
             >
-              <iframe src="https://coupa.ng/clwFc6" width="100%" height="300" style={{ border: 'none' }} scrolling="no" referrerPolicy="unsafe-url"></iframe>
-              <p className="text-[10px] text-gray-400 leading-tight mt-3 text-center">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
+              <iframe src={coupangDynamicUrl} width="160" height="180" frameBorder="0" scrolling="no" referrerPolicy="unsafe-url"></iframe>
+              <p className="text-[10px] text-gray-400 leading-tight mt-2 text-center">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
             </div>
           </aside>
         </main>
@@ -187,7 +221,7 @@ export default function BillApp() {
           </div>
           
           <div className="preview-container bg-white shadow-2xl origin-top">
-            <div ref={printRef} className="p-10 md:p-14 bg-white">
+            <div ref={printRef} className="p-10 md:p-14 bg-white text-left">
               <h1 className="text-4xl md:text-5xl text-center font-bold tracking-[1.5rem] md:tracking-[2.5rem] mb-12 border-b-4 border-double border-black pb-4">견 적 서</h1>
               
               <div className="flex justify-between items-start gap-8 mb-10">
@@ -199,7 +233,7 @@ export default function BillApp() {
                     </p>
                     <p className="text-sm mt-3 text-slate-600 font-medium tracking-tight">아래와 같이 견적합니다.</p>
                   </div>
-                  <div className="mt-4">
+                  <div className="mt-4 text-left">
                     <div className="flex items-baseline gap-2 inline-flex pr-4">
                       <span className="text-2xl font-black tracking-tight text-slate-900">합계금액:</span>
                       <span className="text-2xl font-black tracking-tight text-slate-900">₩{totalAmount.toLocaleString()}</span>
@@ -273,7 +307,7 @@ export default function BillApp() {
                 </tbody>
               </table>
 
-              <div className="border-2 border-black p-5 text-[11px] leading-relaxed bg-slate-50/50">
+              <div className="border-2 border-black p-5 text-[11px] leading-relaxed bg-slate-50/50 text-left">
                 <p className="font-bold text-slate-900 mb-3 underline underline-offset-4 tracking-wider">※ 비고 및 특약사항</p>
                 <div className="flex flex-col gap-1 text-slate-700 font-semibold mb-3">
                   <div>• 이 견적서는 검인받지 않고 사용할 수 있음.</div>
@@ -292,7 +326,10 @@ export default function BillApp() {
 
           <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/90 backdrop-blur grid grid-cols-2 gap-3 no-print z-[60]">
             <button 
-              onClick={saveAsJpg} 
+              onClick={() => {
+                setShowAdModal(true); // 다운로드 대신 광고 팝업 먼저 띄움
+                trackEvent('click_download_trigger', { type: 'jpg' });
+              }} 
               className="bg-white text-slate-900 py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition border-b-2 border-slate-200"
             >
               이미지 다운로드(JPG)
@@ -300,12 +337,70 @@ export default function BillApp() {
             <button 
               onClick={() => {
                 window.print();
-                trackEvent('click_download', { type: 'pdf', customer: info.customer }); // PDF 출력 추적
+                trackEvent('click_download', { type: 'pdf', customer: info.customer });
               }} 
               className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition"
             >
               PDF 출력 / 인쇄
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* [광고 팝업 모달 영역] */}
+      {showAdModal && (
+        <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-[400px] overflow-hidden relative animate-in fade-in zoom-in duration-300">
+            {/* 닫기 버튼 */}
+            <button onClick={() => setShowAdModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition z-10">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+
+            <div className="p-6 pt-10 flex flex-col items-center text-center">
+              <div className="mb-6">
+                <span className="text-3xl mb-3 block">☕</span>
+                <h3 className="text-lg font-black text-slate-800 leading-tight">오늘도 수고 많으셨습니다!</h3>
+                <p className="text-[13px] text-slate-500 mt-2 font-medium">
+                  무료 운영 유지를 위해 광고 한 번 확인해주시면<br/>
+                  더 좋은 기능으로 보답하겠습니다.
+                </p>
+              </div>
+
+              {/* 팝업 내 텐핑 배너 */}
+              <div 
+                className="max-w-4xl mx-auto mt-4 px-4 flex flex-col items-center bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm overflow-hidden cursor-pointer"
+                onClick={() => trackEvent('ad_click_tenping', { location: 'top_banner_tenping' })}
+              >
+                <div className="w-full flex items-center bg-white h-[100px]">
+                  <div className="flex-shrink-0 w-[80px] h-[80px] ml-4 overflow-hidden rounded-xl border border-gray-100">
+                    <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noopener noreferrer">
+                      <img 
+                        src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Squa_20251117151015.jpg?RS=170x170" 
+                        alt="메디콕" 
+                        className="w-full h-full object-cover"
+                      />
+                    </a>
+                  </div>
+                  <div className="flex-1 px-4 text-left">
+                     <h3 className="text-sm md:text-lg font-black text-slate-800 leading-tight">
+                      의사가 설계한 맞춤형 건강기능식품 메디콕!
+                    </h3>
+                  </div>
+                </div>
+                <p className="text-[9px] text-gray-400 mt-1">이 광고는 서비스 운영을 위한 후원을 포함하고 있습니다.</p>
+              </div>
+
+              {/* 실제 다운로드 실행 */}
+              <button
+                onClick={executeDownload}
+                className="w-full mt-6 bg-blue-600 text-white py-4 rounded-xl font-bold text-lg shadow-xl hover:bg-blue-700 active:scale-95 transition"
+              >
+                견적서 파일 저장하기
+              </button>
+              <p className="text-[10px] text-gray-400 mt-4 tracking-tighter italic">항상 사장님의 번창을 진심으로 응원합니다!</p>
+            </div>
           </div>
         </div>
       )}
