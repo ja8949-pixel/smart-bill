@@ -31,7 +31,16 @@ export default function BillApp() {
 
   const totalAmount = items.reduce((acc, cur) => acc + (cur.price * cur.count), 0);
 
+  // [GA4 공통 추적 함수]
+  const trackEvent = (eventName: string, params?: object) => {
+    if (typeof window !== 'undefined' && (window as any).gtag) {
+      (window as any).gtag('event', eventName, params);
+      console.log(`GA4 Event: ${eventName}`, params); // 디버깅용 로그
+    }
+  };
+
   const saveAsJpg = () => {
+    trackEvent('click_download', { type: 'jpg', customer: info.customer }); // JPG 다운로드 추적
     if (printRef.current === null) return;
     toJpeg(printRef.current, { quality: 0.95, backgroundColor: '#ffffff' })
       .then((dataUrl) => {
@@ -43,7 +52,11 @@ export default function BillApp() {
       .catch((err) => console.error('JPG 저장 실패:', err));
   };
 
-  const addItem = () => setItems([...items, { id: Date.now(), name: '', spec: '', count: 1, price: 0 }]);
+  const addItem = () => {
+    trackEvent('bill_add_item'); // 항목 추가 버튼 추적
+    setItems([...items, { id: Date.now(), name: '', spec: '', count: 1, price: 0 }]);
+  };
+
   const updateItem = (id: number, key: keyof BillItem, value: any) => {
     setItems(items.map(i => i.id === id ? { ...i, [key]: value } : i));
   };
@@ -56,11 +69,22 @@ export default function BillApp() {
             <h1 className="text-lg font-black text-blue-600 tracking-tighter italic leading-none">SMART BILL</h1>
             <p className="text-[10px] text-black font-medium mt-1 ml-0.5 uppercase tracking-tighter">made by 진아 ʕ  ̳• ⩊ • ̳ʔ</p>
           </div>
-          <button onClick={() => setShowPreview(true)} className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold text-sm shadow-lg hover:bg-blue-700 transition">미리보기/다운로드</button>
+          <button 
+            onClick={() => {
+              setShowPreview(true);
+              trackEvent('click_preview_top'); // 상단 미리보기 버튼 추적
+            }} 
+            className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold text-sm shadow-lg hover:bg-blue-700 transition"
+          >
+            미리보기/다운로드
+          </button>
         </header>
 
         {/* [상단 광고 영역] */}
-        <div className="max-w-7xl mx-auto mt-4 px-4 flex flex-col items-center bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm">
+        <div 
+          className="max-w-7xl mx-auto mt-4 px-4 flex flex-col items-center bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm cursor-pointer"
+          onClick={() => trackEvent('ad_click', { location: 'top_banner' })}
+        >
           <iframe src="https://coupa.ng/clwE9U" width="100%" height="300" style={{ border: 'none' }} scrolling="no" referrerPolicy="unsafe-url"></iframe>
           <p className="text-[9px] text-gray-400 mt-1">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
         </div>
@@ -68,7 +92,10 @@ export default function BillApp() {
         <main className="max-w-7xl mx-auto p-4 flex flex-col lg:flex-row gap-6">
           {/* [좌측 사이드 광고] */}
           <aside className="hidden xl:flex w-[150px] flex-col items-center gap-4">
-            <div className="sticky top-24 w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200">
+            <div 
+              className="sticky top-24 w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200 cursor-pointer"
+              onClick={() => trackEvent('ad_click', { location: 'left_sidebar' })}
+            >
               <iframe src="https://coupa.ng/clwFcc" width="100%" height="300" style={{ border: 'none' }} scrolling="no" referrerPolicy="unsafe-url"></iframe>
               <p className="text-[10px] text-gray-400 leading-tight mt-3 text-center font-medium italic">Partner's AD</p>
             </div>
@@ -93,6 +120,7 @@ export default function BillApp() {
                     const reader = new FileReader();
                     reader.onloadend = () => setStampImage(reader.result as string);
                     reader.readAsDataURL(file);
+                    trackEvent('upload_stamp'); // 도장 업로드 추적
                   }
                 }} />
                 <button onClick={() => fileInputRef.current?.click()} className="w-full text-xs bg-gray-50 border border-dashed border-gray-300 py-3 rounded-xl font-bold hover:bg-gray-100 transition text-gray-500">
@@ -114,7 +142,12 @@ export default function BillApp() {
                     <input type="number" placeholder="수량" className="border-b text-xs outline-none pb-1 text-left" onChange={e => updateItem(item.id, 'count', Number(e.target.value))} />
                     <input type="number" placeholder="단가" className="border-b text-xs outline-none pb-1 text-left" onChange={e => updateItem(item.id, 'price', Number(e.target.value))} />
                   </div>
-                  <button onClick={() => items.length > 1 && setItems(items.filter(i => i.id !== item.id))} className="absolute top-2 right-2 text-slate-300 hover:text-red-500">✕</button>
+                  <button onClick={() => {
+                    if(items.length > 1) {
+                      setItems(items.filter(i => i.id !== item.id));
+                      trackEvent('bill_remove_item'); // 항목 삭제 추적
+                    }
+                  }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500">✕</button>
                 </div>
               ))}
             </section>
@@ -125,7 +158,10 @@ export default function BillApp() {
             </section>
 
             {/* [하단 광고 영역] */}
-            <div className="w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm">
+            <div 
+              className="w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm cursor-pointer"
+              onClick={() => trackEvent('ad_click', { location: 'bottom_banner' })}
+            >
               <iframe src="https://coupa.ng/clwFfO" width="100%" height="300" style={{ border: 'none' }} scrolling="no" referrerPolicy="unsafe-url"></iframe>
               <p className="text-[9px] text-gray-400 mt-1 italic">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
             </div>
@@ -133,7 +169,10 @@ export default function BillApp() {
 
           {/* [우측 사이드 광고] */}
           <aside className="w-full lg:w-[150px] flex flex-col items-center gap-4">
-            <div className="lg:sticky lg:top-24 w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200">
+            <div 
+              className="lg:sticky lg:top-24 w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200 cursor-pointer"
+              onClick={() => trackEvent('ad_click', { location: 'right_sidebar' })}
+            >
               <iframe src="https://coupa.ng/clwFc6" width="100%" height="300" style={{ border: 'none' }} scrolling="no" referrerPolicy="unsafe-url"></iframe>
               <p className="text-[10px] text-gray-400 leading-tight mt-3 text-center">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
             </div>
@@ -234,18 +273,14 @@ export default function BillApp() {
                 </tbody>
               </table>
 
-              {/* [수정된 비고란 영역] */}
               <div className="border-2 border-black p-5 text-[11px] leading-relaxed bg-slate-50/50">
                 <p className="font-bold text-slate-900 mb-3 underline underline-offset-4 tracking-wider">※ 비고 및 특약사항</p>
-                
                 <div className="flex flex-col gap-1 text-slate-700 font-semibold mb-3">
                   <div>• 이 견적서는 검인받지 않고 사용할 수 있음.</div>
                   <div>• 공사 절충 합의 견적</div>
                   <div>• 공사 착수금 : 30% / 공사 중도금 : 50% / 공사 잔금 : 20%</div>
                   <div>• 부가세 별도 첨부</div>
                 </div>
-
-                {/* 사용자 추가 입력 내용이 고정 문구 바로 밑에 출력됨 */}
                 <div className="border-t border-slate-300 pt-3">
                   <div className="whitespace-pre-wrap text-slate-600 font-medium min-h-[40px]">
                     {info.remark ? `• 추가사항: ${info.remark}` : "- 추가 특이사항 없음"}
@@ -256,8 +291,21 @@ export default function BillApp() {
           </div>
 
           <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/90 backdrop-blur grid grid-cols-2 gap-3 no-print z-[60]">
-            <button onClick={saveAsJpg} className="bg-white text-slate-900 py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition border-b-2 border-slate-200">이미지 다운로드(JPG)</button>
-            <button onClick={() => window.print()} className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition">PDF 출력 / 인쇄</button>
+            <button 
+              onClick={saveAsJpg} 
+              className="bg-white text-slate-900 py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition border-b-2 border-slate-200"
+            >
+              이미지 다운로드(JPG)
+            </button>
+            <button 
+              onClick={() => {
+                window.print();
+                trackEvent('click_download', { type: 'pdf', customer: info.customer }); // PDF 출력 추적
+              }} 
+              className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition"
+            >
+              PDF 출력 / 인쇄
+            </button>
           </div>
         </div>
       )}
