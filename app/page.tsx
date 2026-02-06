@@ -39,7 +39,6 @@ export default function BillApp() {
   const [stampImage, setStampImage] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [showAdModal, setShowAdModal] = useState(false); 
-  // 다운로드 타입을 관리하기 위한 상태 추가
   const [downloadType, setDownloadType] = useState<'JPG' | 'XLSX' | null>(null);
 
   const printRef = useRef<HTMLDivElement>(null);
@@ -47,7 +46,6 @@ export default function BillApp() {
 
   const totalAmount = items.reduce((acc, cur) => acc + (cur.price * cur.count), 0);
 
-  // 엑셀 스타일 정의
   const style = {
     title: { font: { sz: 24, bold: true }, alignment: { vertical: "center", horizontal: "center" } },
     header: { fill: { fgColor: { rgb: "F1F5F9" } }, font: { bold: true, sz: 10 }, border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, alignment: { vertical: "center", horizontal: "center" } },
@@ -57,24 +55,19 @@ export default function BillApp() {
     summary: { fill: { fgColor: { rgb: "F8FAFC" } }, font: { bold: true, color: { rgb: "1E40AF" } }, border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, alignment: { vertical: "center", horizontal: "right" } }
   };
 
-    const exportToExcel = () => {
+  const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([[]]);
-
-    // 1. 병합 정보를 담을 배열을 따로 만듭니다. (타입 에러 방지 핵심)
     const merges: XLSX.Range[] = [];
 
-    // 2. 제목 (A1)
     ws["A1"] = { v: "견 적 서", s: style.title };
     merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } });
 
-    // 3. 좌측 정보
     ws["A3"] = { v: `일자: ${info.date.replace(/-/g, '. ')}`, s: { font: { sz: 10, color: { rgb: "64748B" } } } };
     ws["A4"] = { v: `${info.customer || ""} 귀하`, s: { font: { sz: 16, bold: true }, border: { bottom: { style: "medium" } } } };
     ws["A5"] = { v: "아래와 같이 견적합니다.", s: { font: { sz: 10 } } };
     ws["A6"] = { v: `합계금액: ₩${totalAmount.toLocaleString()}`, s: { font: { sz: 14, bold: true } } };
 
-    // 4. 우측 공급자 테이블
     const providerRows = [
       ["공급자", "등록번호", info.bizNumber, "", ""],
       ["", "상호", info.provider, "서명", "(인)"],
@@ -106,14 +99,12 @@ export default function BillApp() {
     ws["G6"] = { v: info.sector, s: style.cell };
     ws["G3"] = { v: "", s: style.cell }; 
 
-    // 5. 품목 테이블 헤더
     const headerLabels = ["NO", "품 명 / 규 격", "", "", "수 량", "단 가", "금 액"];
     headerLabels.forEach((label, c) => {
       ws[XLSX.utils.encode_cell({ r: 7, c })] = { v: label, s: style.header };
     });
     merges.push({ s: { r: 7, c: 1 }, e: { r: 7, c: 3 } });
 
-    // 6. 품목 데이터
     items.forEach((item, i) => {
       const r = 8 + i;
       ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: i + 1, s: style.cell };
@@ -127,7 +118,6 @@ export default function BillApp() {
       ws[XLSX.utils.encode_cell({ r, c: 3 })] = { s: style.cell };
     });
 
-    // 7. 합계행
     const lastR = 8 + items.length;
     ws[XLSX.utils.encode_cell({ r: lastR, c: 0 })] = { v: "합 계 (TOTAL)", s: style.header };
     merges.push({ s: { r: lastR, c: 0 }, e: { r: lastR, c: 3 } });
@@ -135,21 +125,37 @@ export default function BillApp() {
     ws[XLSX.utils.encode_cell({ r: lastR, c: 5 })] = { v: "", s: style.header };
     ws[XLSX.utils.encode_cell({ r: lastR, c: 6 })] = { v: `₩${totalAmount.toLocaleString()}`, s: style.summary };
 
-    // 8. 비고
     const remarkR = lastR + 2;
     ws[XLSX.utils.encode_cell({ r: remarkR, c: 0 })] = { v: "※ 비고 및 특약사항", s: { font: { bold: true, underline: true } } };
     ws[XLSX.utils.encode_cell({ r: remarkR + 1, c: 0 })] = { v: info.remark || "특이사항 없음", s: { alignment: { wrapText: true, vertical: "top" } } };
     merges.push({ s: { r: remarkR + 1, c: 0 }, e: { r: remarkR + 3, c: 6 } });
 
-    // 9. 만든 병합 정보들을 시트에 할당
     ws["!merges"] = merges;
-
-    // 10. 컬럼 너비 및 범위 설정
     ws["!cols"] = [{ wch: 5 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 15 }];
     ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: remarkR + 4, c: 6 } });
 
     XLSX.utils.book_append_sheet(wb, ws, "견적서");
-    XLSX.writeFile(wb, `견적서_${info.customer || "미지정"}.xlsx`);
+
+    // 모바일(iOS/Android) 호환성을 위한 Blob 다운로드 방식 적용
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'binary' });
+    const s2ab = (s: string) => {
+      const buf = new ArrayBuffer(s.length);
+      const view = new Uint8Array(buf);
+      for (let i = 0; i !== s.length; ++i) view[i] = s.charCodeAt(i) & 0xFF;
+      return buf;
+    };
+    
+    const blob = new Blob([s2ab(wbout)], { type: "application/octet-stream" });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `견적서_${info.customer || "미지정"}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    }, 100);
   };
 
   const saveToLocalStorage = () => {
@@ -182,19 +188,16 @@ export default function BillApp() {
     alert('데이터가 초기화되었습니다.');
   };
 
-  // JPG 다운로드 클릭 시 실행
   const handleDownloadClick = () => {
     setDownloadType('JPG');
     setShowAdModal(true);
   };
 
-  // 엑셀 다운로드 클릭 시 실행
   const handleExcelClick = () => {
     setDownloadType('XLSX');
     setShowAdModal(true);
   };
 
-  // 광고 확인 버튼 클릭 시 실제 다운로드 실행 로직
   const handleAdConfirm = () => {
     if (downloadType === 'JPG') {
       executeDownload();
@@ -248,7 +251,6 @@ export default function BillApp() {
               <iframe src={coupangDynamicUrl} width="360" height="180" frameBorder="0" scrolling="no" referrerPolicy="unsafe-url"></iframe>
             </section>
 
-            {/* 요청하신 메디콕 광고 시작 (TSX 변환 버전) */}
           <div style={{ display: 'inline-block', width: '100%', textAlign: 'center' }}>
             <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
               <div style={{ display: 'inline-block' }}>
@@ -284,7 +286,6 @@ export default function BillApp() {
               </div>
             </a>
           </div>
-          {/* 요청하신 메디콕 광고 끝 */}
 
             <section className="bg-white rounded-2xl p-5 shadow-sm space-y-4 border border-zinc-200">
               <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">사업자 정보</h2>
@@ -472,7 +473,6 @@ export default function BillApp() {
               <p className="text-sm text-slate-500 font-medium leading-relaxed">아래 광고를 클릭해주시면<br/>무료 {downloadType === 'JPG' ? '이미지' : '엑셀'} 다운로드가 시작됩니다. ʕ •ᴥ•ʔ</p>
             </div>
             
-            {/* 요청하신 메디콕 광고 시작 */}
             <div style={{ width: '100%', maxWidth: '800px', margin: '0 auto', fontSize: '14px', textAlign: 'left' }}>
               <div style={{ marginBottom: '5px', padding: '6px', display: 'block', background: '#ffffff', border: '1px solid #dae2e3', overflow: 'hidden', borderRadius: '12px' }}>
                 <div style={{ float: 'left', width: '80px', height: '80px', lineHeight: '0', marginRight: '10px', display: 'block' }}>
@@ -491,7 +491,6 @@ export default function BillApp() {
                 </div>
               </div>
             </div>
-            {/* 요청하신 메디콕 광고 끝 */}
 
             <div className="grid grid-cols-2 gap-3">
               <button onClick={() => { setShowAdModal(false); setDownloadType(null); }} className="py-4 rounded-2xl text-sm font-bold text-slate-400 bg-gray-100">취소</button>
