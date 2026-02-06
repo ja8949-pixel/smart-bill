@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react';
 import { toJpeg } from 'html-to-image';
+import * as XLSX from 'xlsx-js-style';
 
 interface BillItem {
   id: number;
@@ -33,16 +34,109 @@ export default function BillApp() {
     date: new Date().toISOString().split('T')[0], 
     remark: ''
   });
-  
+
   const [items, setItems] = useState<BillItem[]>([{ id: Date.now(), name: '', spec: '', count: 1, price: 0 }]);
   const [stampImage, setStampImage] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [showAdModal, setShowAdModal] = useState(false); 
+  // 다운로드 타입을 관리하기 위한 상태 추가
+  const [downloadType, setDownloadType] = useState<'JPG' | 'XLSX' | null>(null);
 
   const printRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const totalAmount = items.reduce((acc, cur) => acc + (cur.price * cur.count), 0);
+
+  // 엑셀 스타일 정의
+  const style = {
+    title: { font: { sz: 24, bold: true }, alignment: { vertical: "center", horizontal: "center" } },
+    header: { fill: { fgColor: { rgb: "F1F5F9" } }, font: { bold: true, sz: 10 }, border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, alignment: { vertical: "center", horizontal: "center" } },
+    cell: { border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, alignment: { vertical: "center", horizontal: "center" }, font: { sz: 10 } },
+    cellLeft: { border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, alignment: { vertical: "center", horizontal: "left" }, font: { sz: 10, bold: true } },
+    cellRight: { border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, alignment: { vertical: "center", horizontal: "right" }, font: { sz: 10 } },
+    summary: { fill: { fgColor: { rgb: "F8FAFC" } }, font: { bold: true, color: { rgb: "1E40AF" } }, border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, alignment: { vertical: "center", horizontal: "right" } }
+  };
+
+  const exportToExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([[]]);
+
+    ws["A1"] = { v: "견 적 서", s: style.title };
+    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
+
+    ws["A3"] = { v: `일자: ${info.date.replace(/-/g, '. ')}`, s: { font: { sz: 10, color: { rgb: "64748B" } } } };
+    ws["A4"] = { v: `${info.customer || ""} 귀하`, s: { font: { sz: 16, bold: true }, border: { bottom: { style: "medium" } } } };
+    ws["A5"] = { v: "아래와 같이 견적합니다.", s: { font: { sz: 10 } } };
+    ws["A6"] = { v: `합계금액: ₩${totalAmount.toLocaleString()}`, s: { font: { sz: 14, bold: true } } };
+
+    const providerRows = [
+      ["공급자", "등록번호", info.bizNumber, "", ""],
+      ["", "상호", info.provider, "서명", "(인)"],
+      ["", "주소", info.address, "", ""],
+      ["", "업태", info.category, "종목", info.sector]
+    ];
+
+    providerRows.forEach((row, idx) => {
+      const r = 2 + idx;
+      if (idx === 0) {
+        ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: "공\n급\n자", s: style.header };
+        ws["!merges"].push({ s: { r: 2, c: 3 }, e: { r: 5, c: 3 } });
+      }
+      ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: row[1], s: style.header };
+      ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: row[2], s: style.cell };
+      
+      if (idx === 0) ws["!merges"].push({ s: { r: 2, c: 5 }, e: { r: 2, c: 6 } });
+      if (idx === 2) ws["!merges"].push({ s: { r: 4, c: 5 }, e: { r: 4, c: 6 } });
+      
+      if (row[3]) {
+        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: row[2], s: style.cell };
+        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: row[4] || "", s: style.cell };
+      }
+    });
+
+    ws["F4"] = { v: info.provider, s: style.cell };
+    ws["G4"] = { v: "(인)", s: style.cell };
+    ws["F6"] = { v: info.category, s: style.cell };
+    ws["G6"] = { v: info.sector, s: style.cell };
+    ws["G3"] = { v: "", s: style.cell }; 
+
+    const headerLabels = ["NO", "품 명 / 규 격", "", "", "수 량", "단 가", "금 액"];
+    headerLabels.forEach((label, c) => {
+      ws[XLSX.utils.encode_cell({ r: 7, c })] = { v: label, s: style.header };
+    });
+    ws["!merges"].push({ s: { r: 7, c: 1 }, e: { r: 7, c: 3 } });
+
+    items.forEach((item, i) => {
+      const r = 8 + i;
+      ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: i + 1, s: style.cell };
+      ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: `${item.name} ${item.spec ? `(${item.spec})` : ""}`, s: style.cellLeft };
+      ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.count, s: style.cell };
+      ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.price, s: style.cellRight };
+      ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.count * item.price, s: style.cellRight };
+      
+      ws["!merges"].push({ s: { r, c: 1 }, e: { r, c: 3 } });
+      ws[XLSX.utils.encode_cell({ r, c: 2 })] = { s: style.cell };
+      ws[XLSX.utils.encode_cell({ r, c: 3 })] = { s: style.cell };
+    });
+
+    const lastR = 8 + items.length;
+    ws[XLSX.utils.encode_cell({ r: lastR, c: 0 })] = { v: "합 계 (TOTAL)", s: style.header };
+    ws["!merges"].push({ s: { r: lastR, c: 0 }, e: { r: lastR, c: 3 } });
+    ws[XLSX.utils.encode_cell({ r: lastR, c: 4 })] = { v: items.reduce((a, b) => a + b.count, 0), s: style.header };
+    ws[XLSX.utils.encode_cell({ r: lastR, c: 5 })] = { v: "", s: style.header };
+    ws[XLSX.utils.encode_cell({ r: lastR, c: 6 })] = { v: `₩${totalAmount.toLocaleString()}`, s: style.summary };
+
+    const remarkR = lastR + 2;
+    ws[XLSX.utils.encode_cell({ r: remarkR, c: 0 })] = { v: "※ 비고 및 특약사항", s: { font: { bold: true, underline: true } } };
+    ws[XLSX.utils.encode_cell({ r: remarkR + 1, c: 0 })] = { v: info.remark || "특이사항 없음", s: { alignment: { wrapText: true, vertical: "top" } } };
+    ws["!merges"].push({ s: { r: remarkR + 1, c: 0 }, e: { r: remarkR + 3, c: 6 } });
+
+    ws["!cols"] = [{ wch: 5 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 15 }];
+    ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: remarkR + 4, c: 6 } });
+
+    XLSX.utils.book_append_sheet(wb, ws, "견적서");
+    XLSX.writeFile(wb, `견적서_${info.customer || "미지정"}.xlsx`);
+  };
 
   const saveToLocalStorage = () => {
     const data = { info, items, stampImage };
@@ -74,7 +168,28 @@ export default function BillApp() {
     alert('데이터가 초기화되었습니다.');
   };
 
-  const handleDownloadClick = () => setShowAdModal(true);
+  // JPG 다운로드 클릭 시 실행
+  const handleDownloadClick = () => {
+    setDownloadType('JPG');
+    setShowAdModal(true);
+  };
+
+  // 엑셀 다운로드 클릭 시 실행
+  const handleExcelClick = () => {
+    setDownloadType('XLSX');
+    setShowAdModal(true);
+  };
+
+  // 광고 확인 버튼 클릭 시 실제 다운로드 실행 로직
+  const handleAdConfirm = () => {
+    if (downloadType === 'JPG') {
+      executeDownload();
+    } else if (downloadType === 'XLSX') {
+      exportToExcel();
+      setShowAdModal(false);
+      setDownloadType(null);
+    }
+  };
 
   const executeDownload = () => {
     if (printRef.current === null) return;
@@ -85,6 +200,7 @@ export default function BillApp() {
         link.href = dataUrl;
         link.click();
         setShowAdModal(false); 
+        setDownloadType(null);
       })
       .catch((err) => console.error('JPG 저장 실패:', err));
   };
@@ -117,6 +233,44 @@ export default function BillApp() {
             <section className="flex justify-center bg-white rounded-2xl p-2 shadow-sm border border-zinc-200 overflow-hidden">
               <iframe src={coupangDynamicUrl} width="360" height="180" frameBorder="0" scrolling="no" referrerPolicy="unsafe-url"></iframe>
             </section>
+
+            {/* 요청하신 메디콕 광고 시작 (TSX 변환 버전) */}
+          <div style={{ display: 'inline-block', width: '100%', textAlign: 'center' }}>
+            <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+              <div style={{ display: 'inline-block' }}>
+                <div style={{ margin: '10px', background: '#fff', border: '1px solid #dae2e3', borderRadius: '3px', boxShadow: '1px 1px 1px rgba(0,0,0,0.15)' }}>
+                  <div style={{ width: '100%', maxWidth: '420px' }}>
+                    <img 
+                      src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Dis_20251117151015.jpg" 
+                      style={{ width: '100%', height: 'auto', borderRadius: '0', display: 'block' }} 
+                      alt="광고 이미지" 
+                    />
+                  </div>
+                  <div style={{ margin: '10px' }}>
+                    <div style={{ 
+                      margin: '5px 0', 
+                      color: '#333', 
+                      fontSize: '14px', 
+                      lineHeight: '1.4em', 
+                      height: '2.6em', 
+                      display: '-webkit-box', 
+                      textOverflow: 'ellipsis', 
+                      WebkitLineClamp: 2, 
+                      WebkitBoxOrient: 'vertical', 
+                      wordWrap: 'break-word', 
+                      fontWeight: 300, 
+                      textAlign: 'left', 
+                      overflow: 'hidden', 
+                      maxWidth: '400px' 
+                    }}>
+                      의사가 설계한 맞춤형 건강기능식품 메디콕!
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </a>
+          </div>
+          {/* 요청하신 메디콕 광고 끝 */}
 
             <section className="bg-white rounded-2xl p-5 shadow-sm space-y-4 border border-zinc-200">
               <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">사업자 정보</h2>
@@ -286,8 +440,11 @@ export default function BillApp() {
             </div>
           </div>
 
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/90 backdrop-blur grid grid-cols-2 gap-3 no-print z-[60]">
-            <button onClick={handleDownloadClick} className="bg-white text-slate-900 py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition">이미지 다운로드(JPG)</button>
+          <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/90 backdrop-blur grid grid-cols-3 gap-3 no-print z-[60]">
+            <button onClick={handleDownloadClick} className="bg-white text-slate-900 py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition">이미지(JPG)<br/>다운로드</button>
+            <button 
+              onClick={handleExcelClick} 
+              className="bg-green-600 text-white py-4 rounded-xl font-bold text-sm md:text-sm shadow-lg active:scale-95 transition">엑셀(Excel)<br/>다운로드</button>
             <button onClick={() => window.print()} className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition">PDF 출력 / 인쇄</button>
           </div>
         </div>
@@ -295,17 +452,36 @@ export default function BillApp() {
 
       {showAdModal && (
         <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center space-y-4 shadow-2xl">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md text-center space-y-4 shadow-2xl">
             <div className="space-y-2">
               <h3 className="text-xl font-black text-slate-900">다운로드 준비 완료!</h3>
-              <p className="text-sm text-slate-500 font-medium leading-relaxed">아래 파트너스 배너를 한 번만 클릭해주시면<br/>무료 다운로드가 시작됩니다. ʕ •ᴥ•ʔ</p>
+              <p className="text-sm text-slate-500 font-medium leading-relaxed">아래 광고를 클릭해주시면<br/>무료 {downloadType === 'JPG' ? '이미지' : '엑셀'} 다운로드가 시작됩니다. ʕ •ᴥ•ʔ</p>
             </div>
-            <div className="flex justify-center py-2 bg-gray-50 rounded-2xl overflow-hidden border border-gray-100">
-              <iframe src={coupangDynamicUrl} width="360" height="180" frameBorder="0" scrolling="no" referrerPolicy="unsafe-url"></iframe>
+            
+            {/* 요청하신 메디콕 광고 시작 */}
+            <div style={{ width: '100%', maxWidth: '800px', margin: '0 auto', fontSize: '14px', textAlign: 'left' }}>
+              <div style={{ marginBottom: '5px', padding: '6px', display: 'block', background: '#ffffff', border: '1px solid #dae2e3', overflow: 'hidden', borderRadius: '12px' }}>
+                <div style={{ float: 'left', width: '80px', height: '80px', lineHeight: '0', marginRight: '10px', display: 'block' }}>
+                  <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer">
+                    <img src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Squa_20251117151015.jpg?RS=170x170" alt="" width="80" height="80" style={{ borderRadius: '8px' }} />
+                  </a>
+                </div>
+                <div>
+                  <div style={{ height: '5rem', lineHeight: '1.6', margin: '0', padding: '0', display: 'flex', flexDirection: 'column', justifyContent: 'space-around' }}>
+                    <strong>
+                      <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" style={{ color: '#333333', fontSize: '17px', fontWeight: 'bold', fontFamily: 'Malgun Gothic, sans-serif', textDecoration: 'none' }}>
+                        의사가 설계한 맞춤형 건강기능식품 메디콕!
+                      </a>
+                    </strong>
+                  </div>
+                </div>
+              </div>
             </div>
+            {/* 요청하신 메디콕 광고 끝 */}
+
             <div className="grid grid-cols-2 gap-3">
-              <button onClick={() => setShowAdModal(false)} className="py-4 rounded-2xl text-sm font-bold text-slate-400 bg-gray-100">취소</button>
-              <button onClick={executeDownload} className="py-4 rounded-2xl text-sm font-bold text-white bg-blue-600 shadow-lg shadow-blue-200">광고 확인 및 저장</button>
+              <button onClick={() => { setShowAdModal(false); setDownloadType(null); }} className="py-4 rounded-2xl text-sm font-bold text-slate-400 bg-gray-100">취소</button>
+              <button onClick={handleAdConfirm} className="py-4 rounded-2xl text-sm font-bold text-white bg-blue-600 shadow-lg shadow-blue-200">광고 확인 및 저장</button>
             </div>
           </div>
         </div>
