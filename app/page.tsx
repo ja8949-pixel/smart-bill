@@ -57,20 +57,24 @@ export default function BillApp() {
     summary: { fill: { fgColor: { rgb: "F8FAFC" } }, font: { bold: true, color: { rgb: "1E40AF" } }, border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, alignment: { vertical: "center", horizontal: "right" } }
   };
 
-  const exportToExcel = () => {
+    const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([[]]);
 
-    if (!ws["!merges"]) ws["!merges"] = []; // 빌드 에러방지용 초기화
+    // 1. 병합 정보를 담을 배열을 따로 만듭니다. (타입 에러 방지 핵심)
+    const merges: XLSX.Range[] = [];
 
+    // 2. 제목 (A1)
     ws["A1"] = { v: "견 적 서", s: style.title };
-    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
+    merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } });
 
+    // 3. 좌측 정보
     ws["A3"] = { v: `일자: ${info.date.replace(/-/g, '. ')}`, s: { font: { sz: 10, color: { rgb: "64748B" } } } };
     ws["A4"] = { v: `${info.customer || ""} 귀하`, s: { font: { sz: 16, bold: true }, border: { bottom: { style: "medium" } } } };
     ws["A5"] = { v: "아래와 같이 견적합니다.", s: { font: { sz: 10 } } };
     ws["A6"] = { v: `합계금액: ₩${totalAmount.toLocaleString()}`, s: { font: { sz: 14, bold: true } } };
 
+    // 4. 우측 공급자 테이블
     const providerRows = [
       ["공급자", "등록번호", info.bizNumber, "", ""],
       ["", "상호", info.provider, "서명", "(인)"],
@@ -82,13 +86,13 @@ export default function BillApp() {
       const r = 2 + idx;
       if (idx === 0) {
         ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: "공\n급\n자", s: style.header };
-        ws["!merges"].push({ s: { r: 2, c: 3 }, e: { r: 5, c: 3 } });
+        merges.push({ s: { r: 2, c: 3 }, e: { r: 5, c: 3 } });
       }
       ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: row[1], s: style.header };
       ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: row[2], s: style.cell };
       
-      if (idx === 0) ws["!merges"].push({ s: { r: 2, c: 5 }, e: { r: 2, c: 6 } });
-      if (idx === 2) ws["!merges"].push({ s: { r: 4, c: 5 }, e: { r: 4, c: 6 } });
+      if (idx === 0) merges.push({ s: { r: 2, c: 5 }, e: { r: 2, c: 6 } });
+      if (idx === 2) merges.push({ s: { r: 4, c: 5 }, e: { r: 4, c: 6 } });
       
       if (row[3]) {
         ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: row[2], s: style.cell };
@@ -102,12 +106,14 @@ export default function BillApp() {
     ws["G6"] = { v: info.sector, s: style.cell };
     ws["G3"] = { v: "", s: style.cell }; 
 
+    // 5. 품목 테이블 헤더
     const headerLabels = ["NO", "품 명 / 규 격", "", "", "수 량", "단 가", "금 액"];
     headerLabels.forEach((label, c) => {
       ws[XLSX.utils.encode_cell({ r: 7, c })] = { v: label, s: style.header };
     });
-    ws["!merges"].push({ s: { r: 7, c: 1 }, e: { r: 7, c: 3 } });
+    merges.push({ s: { r: 7, c: 1 }, e: { r: 7, c: 3 } });
 
+    // 6. 품목 데이터
     items.forEach((item, i) => {
       const r = 8 + i;
       ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: i + 1, s: style.cell };
@@ -116,23 +122,29 @@ export default function BillApp() {
       ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.price, s: style.cellRight };
       ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.count * item.price, s: style.cellRight };
       
-      ws["!merges"].push({ s: { r, c: 1 }, e: { r, c: 3 } });
+      merges.push({ s: { r, c: 1 }, e: { r, c: 3 } });
       ws[XLSX.utils.encode_cell({ r, c: 2 })] = { s: style.cell };
       ws[XLSX.utils.encode_cell({ r, c: 3 })] = { s: style.cell };
     });
 
+    // 7. 합계행
     const lastR = 8 + items.length;
     ws[XLSX.utils.encode_cell({ r: lastR, c: 0 })] = { v: "합 계 (TOTAL)", s: style.header };
-    ws["!merges"].push({ s: { r: lastR, c: 0 }, e: { r: lastR, c: 3 } });
+    merges.push({ s: { r: lastR, c: 0 }, e: { r: lastR, c: 3 } });
     ws[XLSX.utils.encode_cell({ r: lastR, c: 4 })] = { v: items.reduce((a, b) => a + b.count, 0), s: style.header };
     ws[XLSX.utils.encode_cell({ r: lastR, c: 5 })] = { v: "", s: style.header };
     ws[XLSX.utils.encode_cell({ r: lastR, c: 6 })] = { v: `₩${totalAmount.toLocaleString()}`, s: style.summary };
 
+    // 8. 비고
     const remarkR = lastR + 2;
     ws[XLSX.utils.encode_cell({ r: remarkR, c: 0 })] = { v: "※ 비고 및 특약사항", s: { font: { bold: true, underline: true } } };
     ws[XLSX.utils.encode_cell({ r: remarkR + 1, c: 0 })] = { v: info.remark || "특이사항 없음", s: { alignment: { wrapText: true, vertical: "top" } } };
-    ws["!merges"].push({ s: { r: remarkR + 1, c: 0 }, e: { r: remarkR + 3, c: 6 } });
+    merges.push({ s: { r: remarkR + 1, c: 0 }, e: { r: remarkR + 3, c: 6 } });
 
+    // 9. 만든 병합 정보들을 시트에 할당
+    ws["!merges"] = merges;
+
+    // 10. 컬럼 너비 및 범위 설정
     ws["!cols"] = [{ wch: 5 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 15 }];
     ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: remarkR + 4, c: 6 } });
 
@@ -252,7 +264,7 @@ export default function BillApp() {
                     <div style={{ 
                       margin: '5px 0', 
                       color: '#333', 
-                      fontSize: '14px', 
+                      fontSize: '18px', 
                       lineHeight: '1.4em', 
                       height: '2.6em', 
                       display: '-webkit-box', 
