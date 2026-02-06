@@ -12,36 +12,75 @@ interface BillItem {
 }
 
 interface MasterInfo {
-  provider: string; bizNumber: string; address: string;
-  category: string; sector: string; customer: string; date: string;
+  provider: string; 
+  bizNumber: string; 
+  address: string;
+  category: string; 
+  sector: string; 
+  customer: string; 
+  date: string;
   remark: string;
 }
 
 export default function BillApp() {
   const [info, setInfo] = useState<MasterInfo>({
-    provider: '', bizNumber: '', address: '', category: '', sector: '', customer: '',
-    date: new Date().toISOString().split('T')[0], remark: ''
+    provider: '', 
+    bizNumber: '', 
+    address: '', 
+    category: '', 
+    sector: '', 
+    customer: '',
+    date: new Date().toISOString().split('T')[0], 
+    remark: ''
   });
+  
   const [items, setItems] = useState<BillItem[]>([{ id: Date.now(), name: '', spec: '', count: 1, price: 0 }]);
   const [stampImage, setStampImage] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [showAdModal, setShowAdModal] = useState(false); // [추가] 광고 팝업 상태
+  const [showAdModal, setShowAdModal] = useState(false); // 광고 팝업 상태
   
   const printRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const totalAmount = items.reduce((acc, cur) => acc + (cur.price * cur.count), 0);
 
-  const trackEvent = (eventName: string, params?: object) => {
-    if (typeof window !== 'undefined' && (window as any).gtag) {
-      (window as any).gtag('event', eventName, params);
-      console.log(`GA4 Event: ${eventName}`, params);
+  const saveToLocalStorage = () => {
+    const data = { info, items, stampImage };
+    localStorage.setItem('billData', JSON.stringify(data));
+    alert('임시 저장되었습니다.');
+  };
+
+  const loadFromLocalStorage = () => {
+    const savedData = localStorage.getItem('billData');
+    if (savedData) {
+      const data = JSON.parse(savedData);
+      setInfo(data.info);
+      setItems(data.items);
+      setStampImage(data.stampImage);
+      alert('임시 저장된 데이터를 불러왔습니다.');
+    } else {
+      alert('저장된 데이터가 없습니다.');
     }
   };
 
-  // [수정] 실제 다운로드 실행 로직
+  const resetData = () => {
+    setInfo({
+      provider: '', 
+      bizNumber: '', 
+      address: '', 
+      category: '', 
+      sector: '', 
+      customer: '',
+      date: new Date().toISOString().split('T')[0], 
+      remark: ''
+    });
+    setItems([{ id: Date.now(), name: '', spec: '', count: 1, price: 0 }]);
+    setStampImage(null);
+    localStorage.removeItem('billData');
+    alert('데이터가 초기화되었습니다.');
+  };
+
   const executeDownload = () => {
-    trackEvent('click_download_confirm', { type: 'jpg', customer: info.customer });
     if (printRef.current === null) return;
     
     toJpeg(printRef.current, { quality: 0.95, backgroundColor: '#ffffff' })
@@ -56,7 +95,6 @@ export default function BillApp() {
   };
 
   const addItem = () => {
-    trackEvent('bill_add_item');
     setItems([...items, { id: Date.now(), name: '', spec: '', count: 1, price: 0 }]);
   };
 
@@ -77,7 +115,6 @@ export default function BillApp() {
           <button 
             onClick={() => {
               setShowPreview(true);
-              trackEvent('click_preview_top');
             }} 
             className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold text-sm shadow-lg hover:bg-blue-700 transition"
           >
@@ -85,69 +122,26 @@ export default function BillApp() {
           </button>
         </header>
 
-        {/* 상단 쿠팡 배너 */}
-        <div 
-          className="max-w-4xl mx-auto mt-4 px-4 flex flex-col items-center bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm"
-          onClick={() => trackEvent('ad_click', { location: 'top_banner' })}
-        >
-          <iframe 
-            src={coupangDynamicUrl} 
-            width="580" 
-            height="180" 
-            frameBorder="0" 
-            scrolling="no" 
-            referrerPolicy="unsafe-url"
-          ></iframe>
-          <p className="text-[9px] text-gray-400 mt-1">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
-        </div>
-
-        {/* 상단 텐핑 배너 */}
-        <div 
-          className="max-w-4xl mx-auto mt-4 px-4 flex flex-col items-center bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm overflow-hidden cursor-pointer"
-          onClick={() => trackEvent('ad_click_tenping', { location: 'top_banner_tenping' })}
-        >
-          <div className="w-full flex items-center bg-white h-[100px]">
-            <div className="flex-shrink-0 w-[80px] h-[80px] ml-4 overflow-hidden rounded-xl border border-gray-100">
-              <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noopener noreferrer">
-                <img 
-                  src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Squa_20251117151015.jpg?RS=170x170" 
-                  alt="메디콕" 
-                  className="w-full h-full object-cover"
-                />
-              </a>
-            </div>
-            <div className="flex-1 px-4 text-left">
-              <p className="text-blue-500 text-[10px] font-bold">광고 클릭 한번이 무료 서비스 운영에 큰 힘이 됩니다 ♡</p>
-              <h3 className="text-sm md:text-lg font-black text-slate-800 leading-tight">
-                의사가 설계한 맞춤형 건강기능식품 메디콕!
-              </h3>
-            </div>
-          </div>
-          <p className="text-[9px] text-gray-400 mt-1">이 광고는 서비스 운영을 위한 후원을 포함하고 있습니다.</p>
-        </div>
-
         <main className="max-w-7xl mx-auto p-4 flex flex-col lg:flex-row gap-6">
-          <aside className="hidden xl:flex w-[180px] flex-col items-center gap-4">
-            <div 
-              className="sticky top-24 w-full flex flex-col items-center bg-white p-2 rounded-2xl border border-zinc-200"
-              onClick={() => trackEvent('ad_click', { location: 'left_sidebar' })}
-            >
-              <iframe src={coupangDynamicUrl} width="120" height="400" frameBorder="0" scrolling="no" referrerPolicy="unsafe-url"></iframe>
-              <p className="text-[10px] text-gray-400 leading-tight mt-2 text-center font-medium italic">Partner's AD</p>
-            </div>
-          </aside>
-
           <div className="flex-1 space-y-6 text-left">
             <section className="bg-white rounded-2xl p-5 shadow-sm space-y-4 border border-zinc-200">
               <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">사업자 정보</h2>
               <div className="grid grid-cols-2 gap-3">
-                <input type="text" placeholder="사업자명" className="input-style" onChange={e => setInfo({...info, provider: e.target.value})} />
-                <input type="text" placeholder="사업자등록번호" className="input-style" onChange={e => setInfo({...info, bizNumber: e.target.value})} />
+                <input type="text" placeholder="사업자명" value={info.provider} className="input-style" onChange={e => setInfo({...info, provider: e.target.value})} />
+                <input type="text" placeholder="사업자등록번호" value={info.bizNumber} className="input-style" onChange={e => setInfo({...info, bizNumber: e.target.value})} />
                 <input type="date" className="input-style" value={info.date} onChange={e => setInfo({...info, date: e.target.value})} />
-                <input type="text" placeholder="받는분(귀하)" className="input-style" onChange={e => setInfo({...info, customer: e.target.value})} />
-                <input type="text" placeholder="주소" className="input-style col-span-2" onChange={e => setInfo({...info, address: e.target.value})} />
-                <input type="text" placeholder="업태" className="input-style" onChange={e => setInfo({...info, category: e.target.value})} />
-                <input type="text" placeholder="종목" className="input-style" onChange={e => setInfo({...info, sector: e.target.value})} />
+                <input type="text" placeholder="받는분(귀하)" value={info.customer} className="input-style" onChange={e => setInfo({...info, customer: e.target.value})} />
+                <input type="text" placeholder="업태" value={info.category} className="input-style" onChange={e => setInfo({...info, category: e.target.value})} />
+                <input type="text" placeholder="종목" value={info.sector} className="input-style" onChange={e => setInfo({...info, sector: e.target.value})} />
+                <input type="text" placeholder="주소" value={info.address} className="input-style col-span-2" onChange={e => setInfo({...info, address: e.target.value})} />
+              </div>
+              <div className="pt-2 flex justify-between">
+                <button onClick={saveToLocalStorage} className="w-1/2 text-xs bg-gray-50 border border-gray-300 py-3 rounded-xl font-bold hover:bg-gray-100 transition text-gray-500">
+                  임시 저장
+                </button>
+                <button onClick={resetData} className="w-1/2 text-xs bg-red-500 text-white py-3 rounded-xl font-bold hover:bg-red-600 transition">
+                  초기화
+                </button>
               </div>
               <div className="pt-2">
                 <input type="file" accept="image/*" ref={fileInputRef} hidden onChange={(e) => {
@@ -156,12 +150,16 @@ export default function BillApp() {
                     const reader = new FileReader();
                     reader.onloadend = () => setStampImage(reader.result as string);
                     reader.readAsDataURL(file);
-                    trackEvent('upload_stamp');
                   }
                 }} />
                 <button onClick={() => fileInputRef.current?.click()} className="w-full text-xs bg-gray-50 border border-dashed border-gray-300 py-3 rounded-xl font-bold hover:bg-gray-100 transition text-gray-500">
                   {stampImage ? "도장 교체하기" : "도장파일 업로드"}
                 </button>
+                {stampImage && (
+                  <div className="mt-2">
+                    <img src={stampImage} alt="도장" className="h-12 w-12" />
+                  </div>
+                )}
               </div>
             </section>
             
@@ -178,12 +176,6 @@ export default function BillApp() {
                     <input type="number" placeholder="수량" className="border-b text-xs outline-none pb-1 text-left" onChange={e => updateItem(item.id, 'count', Number(e.target.value))} />
                     <input type="number" placeholder="단가" className="border-b text-xs outline-none pb-1 text-left" onChange={e => updateItem(item.id, 'price', Number(e.target.value))} />
                   </div>
-                  <button onClick={() => {
-                    if(items.length > 1) {
-                      setItems(items.filter(i => i.id !== item.id));
-                      trackEvent('bill_remove_item');
-                    }
-                  }} className="absolute top-2 right-2 text-slate-300 hover:text-red-500">✕</button>
                 </div>
               ))}
             </section>
@@ -192,25 +184,7 @@ export default function BillApp() {
               <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">비고란</h2>
               <textarea className="w-full bg-gray-50 rounded-xl p-3 text-sm outline-none h-20 focus:ring-1 focus:ring-blue-500" placeholder="추가 기재사항을 작성해주세요." onChange={e => setInfo({...info, remark: e.target.value})} />
             </section>
-
-            <div 
-              className="w-full flex flex-col items-center bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm"
-              onClick={() => trackEvent('ad_click', { location: 'bottom_banner' })}
-            >
-              <iframe src={coupangDynamicUrl} width="380" height="180" frameBorder="0" scrolling="no" referrerPolicy="unsafe-url"></iframe>
-              <p className="text-[9px] text-gray-400 mt-1 italic">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
-            </div>
           </div>
-
-          <aside className="w-full lg:w-[180px] flex flex-col items-center gap-4">
-            <div 
-              className="lg:sticky lg:top-24 w-full flex flex-col items-center bg-white p-2 rounded-2xl border border-zinc-200"
-              onClick={() => trackEvent('ad_click', { location: 'right_sidebar' })}
-            >
-              <iframe src={coupangDynamicUrl} width="160" height="180" frameBorder="0" scrolling="no" referrerPolicy="unsafe-url"></iframe>
-              <p className="text-[10px] text-gray-400 leading-tight mt-2 text-center">이 포스팅은 쿠팡 파트너스 활동의 일환으로 수수료를 제공받습니다.</p>
-            </div>
-          </aside>
         </main>
       </div>
 
@@ -243,27 +217,51 @@ export default function BillApp() {
 
                 <div className="w-[400px] min-w-[400px] shrink-0">
                   <table className="border-collapse border-2 border-black w-full text-[11px] table-fixed">
+                    {/* [핵심 가이드] 전체 5개의 열로 쪼개서 비율을 미리 정의합니다. */}
+                    <colgroup>
+                      <col style={{ width: '30px' }} />  {/* 공급자 세로칸 */}
+                      <col style={{ width: '70px' }} />  {/* 제목 칸 (사업자번호, 상호, 주소 등) */}
+                      <col style={{ width: 'auto' }} />  {/* 입력 칸 (상호 8 비율) */}
+                      <col style={{ width: '70px' }} />  {/* 성명 제목칸 */}
+                    </colgroup>
+
                     <tbody>
+                      {/* 1행: 사업자등록번호 */}
                       <tr className="h-12">
-                        <td className="border border-black p-1 w-7 text-center bg-slate-100 font-bold" rowSpan={5}>공<br/>급<br/>자</td>
-                        <td className="border border-black p-2 bg-slate-100 font-bold w-16 text-center">사업자<br/>등록번호</td>
+                        <td className="border border-black p-1 text-center bg-slate-100 font-bold" rowSpan={5}>공<br/>급<br/>자</td>
+                        <td className="border border-black p-2 bg-slate-100 font-bold text-center">사업자<br/>등록번호</td>
+                        {/* 뒤의 3칸을 다 합쳐서 번호 칸으로 씁니다. */}
                         <td className="border border-black p-2 font-bold text-[12px]" colSpan={3}>{info.bizNumber}</td>
                       </tr>
+
+                      {/* 2행: 상호 및 서명 (8:2 비율 적용 지점) */}
                       <tr className="h-14">
                         <td className="border border-black p-2 bg-slate-100 font-bold text-center">상호</td>
-                        <td className="border border-black p-2 font-bold">{info.provider}</td>
-                        <td className="border border-black p-2 bg-slate-100 font-bold w-10 text-center">성명</td>
-                        <td className="border border-black p-2 text-right relative pr-6">
-                          (인)
+                        {/* 8의 비율을 가지는 상호 칸 */}
+                        <td className="border border-black p-2 font-bold text-[13px]">
+                          {info.provider}
+                        </td>
+                        <td className="border border-black p-2 bg-slate-100 font-bold text-center">서명</td>
+                        {/* 2의 비율을 가지는 도장 칸 - 도장 크기 키움 */}
+                        <td className="border border-black p-0 text-right relative min-w-[60px]">
+                          <div className="pr-3 py-4 font-bold text-[13px]">(인)</div>
                           {stampImage && (
-                            <img src={stampImage} alt="인감" className="absolute top-1/2 -translate-y-1/2 right-1 w-12 h-12 object-contain mix-blend-multiply" />
+                            <img 
+                              src={stampImage} 
+                              alt="인감" 
+                              className="absolute top-1/2 -translate-y-1/2 right-0.5 w-12 h-12 object-contain mix-blend-multiply" 
+                            />
                           )}
                         </td>
                       </tr>
+
+                      {/* 3행: 주소 */}
                       <tr className="h-12">
                         <td className="border border-black p-2 bg-slate-100 font-bold text-center">주소</td>
                         <td className="border border-black p-2 text-[10px] leading-tight" colSpan={3}>{info.address}</td>
                       </tr>
+
+                      {/* 4행: 업태 및 종목 */}
                       <tr className="h-12">
                         <td className="border border-black p-2 bg-slate-100 font-bold text-center">업태</td>
                         <td className="border border-black p-2 text-center">{info.category}</td>
@@ -326,10 +324,7 @@ export default function BillApp() {
 
           <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/90 backdrop-blur grid grid-cols-2 gap-3 no-print z-[60]">
             <button 
-              onClick={() => {
-                setShowAdModal(true); // 다운로드 대신 광고 팝업 먼저 띄움
-                trackEvent('click_download_trigger', { type: 'jpg' });
-              }} 
+              onClick={executeDownload} 
               className="bg-white text-slate-900 py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition border-b-2 border-slate-200"
             >
               이미지 다운로드(JPG)
@@ -337,70 +332,11 @@ export default function BillApp() {
             <button 
               onClick={() => {
                 window.print();
-                trackEvent('click_download', { type: 'pdf', customer: info.customer });
               }} 
               className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition"
             >
               PDF 출력 / 인쇄
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* [광고 팝업 모달 영역] */}
-      {showAdModal && (
-        <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-[400px] overflow-hidden relative animate-in fade-in zoom-in duration-300">
-            {/* 닫기 버튼 */}
-            <button onClick={() => setShowAdModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition z-10">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-
-            <div className="p-6 pt-10 flex flex-col items-center text-center">
-              <div className="mb-6">
-                <span className="text-3xl mb-3 block">☕</span>
-                <h3 className="text-lg font-black text-slate-800 leading-tight">오늘도 수고 많으셨습니다!</h3>
-                <p className="text-[13px] text-slate-500 mt-2 font-medium">
-                  무료 운영 유지를 위해 광고 한 번 확인해주시면<br/>
-                  더 좋은 기능으로 보답하겠습니다.
-                </p>
-              </div>
-
-              {/* 팝업 내 텐핑 배너 */}
-              <div 
-                className="max-w-4xl mx-auto mt-4 px-4 flex flex-col items-center bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm overflow-hidden cursor-pointer"
-                onClick={() => trackEvent('ad_click_tenping', { location: 'top_banner_tenping' })}
-              >
-                <div className="w-full flex items-center bg-white h-[100px]">
-                  <div className="flex-shrink-0 w-[80px] h-[80px] ml-4 overflow-hidden rounded-xl border border-gray-100">
-                    <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noopener noreferrer">
-                      <img 
-                        src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Squa_20251117151015.jpg?RS=170x170" 
-                        alt="메디콕" 
-                        className="w-full h-full object-cover"
-                      />
-                    </a>
-                  </div>
-                  <div className="flex-1 px-4 text-left">
-                     <h3 className="text-sm md:text-lg font-black text-slate-800 leading-tight">
-                      의사가 설계한 맞춤형 건강기능식품 메디콕!
-                    </h3>
-                  </div>
-                </div>
-                <p className="text-[9px] text-gray-400 mt-1">이 광고는 서비스 운영을 위한 후원을 포함하고 있습니다.</p>
-              </div>
-
-              {/* 실제 다운로드 실행 */}
-              <button
-                onClick={executeDownload}
-                className="w-full mt-6 bg-blue-600 text-white py-4 rounded-xl font-bold text-lg shadow-xl hover:bg-blue-700 active:scale-95 transition"
-              >
-                견적서 파일 저장하기
-              </button>
-              <p className="text-[10px] text-gray-400 mt-4 tracking-tighter italic">항상 사장님의 번창을 진심으로 응원합니다!</p>
-            </div>
           </div>
         </div>
       )}
