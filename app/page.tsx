@@ -61,6 +61,8 @@ export default function BillApp() {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([[]]);
 
+    if (!ws["!merges"]) ws["!merges"] = []; // 빌드 에러방지용 초기화
+
     ws["A1"] = { v: "견 적 서", s: style.title };
     ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }];
 
