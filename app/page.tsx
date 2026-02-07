@@ -237,7 +237,7 @@ export default function BillApp() {
       <div className="no-print">
         <header className="bg-white border-b px-4 py-3 sticky top-0 z-20 flex justify-between items-center shadow-sm">
           <div>
-            <h1 className="text-lg font-black text-blue-600 tracking-tighter italic leading-none">SMART BILL</h1>
+            <img src="/images/smart_bill_logo.png" alt="SMART BILL 로고" className="h-14 w-14" />
             <p className="text-[10px] text-black font-medium mt-1 ml-0.5 uppercase tracking-tighter">made by 진아 ʕ  ̳• ⩊ • ̳ʔ</p>
           </div>
           <button onClick={() => setShowPreview(true)} className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold text-sm shadow-lg hover:bg-blue-700 transition">
