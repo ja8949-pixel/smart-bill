@@ -55,107 +55,131 @@ export default function BillApp() {
     summary: { fill: { fgColor: { rgb: "F8FAFC" } }, font: { bold: true, color: { rgb: "1E40AF" } }, border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }, alignment: { vertical: "center", horizontal: "right" } }
   };
 
+  /**
+   * [iOS 호환] 엑셀 다운로드 함수
+   */
   const exportToExcel = () => {
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([[]]);
-    const merges: XLSX.Range[] = [];
+    try {
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet([[]]);
+      const merges: XLSX.Range[] = [];
 
-    ws["A1"] = { v: "견 적 서", s: style.title };
-    merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } });
+      ws["A1"] = { v: "견 적 서", s: style.title };
+      merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } });
 
-    ws["A3"] = { v: `일자: ${info.date.replace(/-/g, '. ')}`, s: { font: { sz: 10, color: { rgb: "64748B" } } } };
-    ws["A4"] = { v: `${info.customer || ""} 귀하`, s: { font: { sz: 16, bold: true }, border: { bottom: { style: "medium" } } } };
-    ws["A5"] = { v: "아래와 같이 견적합니다.", s: { font: { sz: 10 } } };
-    ws["A6"] = { v: `합계금액: ₩${totalAmount.toLocaleString()}`, s: { font: { sz: 14, bold: true } } };
+      ws["A3"] = { v: `일자: ${info.date.replace(/-/g, '. ')}`, s: { font: { sz: 10, color: { rgb: "64748B" } } } };
+      ws["A4"] = { v: `${info.customer || ""} 귀하`, s: { font: { sz: 16, bold: true }, border: { bottom: { style: "medium" } } } };
+      ws["A5"] = { v: "아래와 같이 견적합니다.", s: { font: { sz: 10 } } };
+      ws["A6"] = { v: `합계금액: ₩${totalAmount.toLocaleString()}`, s: { font: { sz: 14, bold: true } } };
 
-    const providerRows = [
-      ["공급자", "등록번호", info.bizNumber, "", ""],
-      ["", "상호", info.provider, "서명", "(인)"],
-      ["", "주소", info.address, "", ""],
-      ["", "업태", info.category, "종목", info.sector]
-    ];
+      const providerRows = [
+        ["공급자", "등록번호", info.bizNumber, "", ""],
+        ["", "상호", info.provider, "서명", "(인)"],
+        ["", "주소", info.address, "", ""],
+        ["", "업태", info.category, "종목", info.sector]
+      ];
 
-    providerRows.forEach((row, idx) => {
-      const r = 2 + idx;
-      if (idx === 0) {
-        ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: "공\n급\n자", s: style.header };
-        merges.push({ s: { r: 2, c: 3 }, e: { r: 5, c: 3 } });
-      }
-      ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: row[1], s: style.header };
-      ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: row[2], s: style.cell };
-      
-      if (idx === 0) merges.push({ s: { r: 2, c: 5 }, e: { r: 2, c: 6 } });
-      if (idx === 2) merges.push({ s: { r: 4, c: 5 }, e: { r: 4, c: 6 } });
-      
-      if (row[3]) {
+      providerRows.forEach((row, idx) => {
+        const r = 2 + idx;
+        if (idx === 0) {
+          ws[XLSX.utils.encode_cell({ r, c: 3 })] = { v: "공\n급\n자", s: style.header };
+          merges.push({ s: { r: 2, c: 3 }, e: { r: 5, c: 3 } });
+        }
+        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: row[1], s: style.header };
         ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: row[2], s: style.cell };
-        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: row[4] || "", s: style.cell };
-      }
-    });
+        
+        if (idx === 0) merges.push({ s: { r: 2, c: 5 }, e: { r: 2, c: 6 } });
+        if (idx === 2) merges.push({ s: { r: 4, c: 5 }, e: { r: 4, c: 6 } });
+        
+        if (row[3]) {
+          ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: row[2], s: style.cell };
+          ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: row[4] || "", s: style.cell };
+        }
+      });
 
-    ws["F4"] = { v: info.provider, s: style.cell };
-    ws["G4"] = { v: "(인)", s: style.cell };
-    ws["F6"] = { v: info.category, s: style.cell };
-    ws["G6"] = { v: info.sector, s: style.cell };
-    ws["G3"] = { v: "", s: style.cell }; 
+      ws["F4"] = { v: info.provider, s: style.cell };
+      ws["G4"] = { v: "(인)", s: style.cell };
+      ws["F6"] = { v: info.category, s: style.cell };
+      ws["G6"] = { v: info.sector, s: style.cell };
+      ws["G3"] = { v: "", s: style.cell }; 
 
-    const headerLabels = ["NO", "품 명 / 규 격", "", "", "수 량", "단 가", "금 액"];
-    headerLabels.forEach((label, c) => {
-      ws[XLSX.utils.encode_cell({ r: 7, c })] = { v: label, s: style.header };
-    });
-    merges.push({ s: { r: 7, c: 1 }, e: { r: 7, c: 3 } });
+      const headerLabels = ["NO", "품 명 / 규 격", "", "", "수 량", "단 가", "금 액"];
+      headerLabels.forEach((label, c) => {
+        ws[XLSX.utils.encode_cell({ r: 7, c })] = { v: label, s: style.header };
+      });
+      merges.push({ s: { r: 7, c: 1 }, e: { r: 7, c: 3 } });
 
-    items.forEach((item, i) => {
-      const r = 8 + i;
-      ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: i + 1, s: style.cell };
-      ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: `${item.name} ${item.spec ? `(${item.spec})` : ""}`, s: style.cellLeft };
-      ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.count, s: style.cell };
-      ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.price, s: style.cellRight };
-      ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.count * item.price, s: style.cellRight };
-      
-      merges.push({ s: { r, c: 1 }, e: { r, c: 3 } });
-      ws[XLSX.utils.encode_cell({ r, c: 2 })] = { s: style.cell };
-      ws[XLSX.utils.encode_cell({ r, c: 3 })] = { s: style.cell };
-    });
+      items.forEach((item, i) => {
+        const r = 8 + i;
+        ws[XLSX.utils.encode_cell({ r, c: 0 })] = { v: i + 1, s: style.cell };
+        ws[XLSX.utils.encode_cell({ r, c: 1 })] = { v: `${item.name} ${item.spec ? `(${item.spec})` : ""}`, s: style.cellLeft };
+        ws[XLSX.utils.encode_cell({ r, c: 4 })] = { v: item.count, s: style.cell };
+        ws[XLSX.utils.encode_cell({ r, c: 5 })] = { v: item.price, s: style.cellRight };
+        ws[XLSX.utils.encode_cell({ r, c: 6 })] = { v: item.count * item.price, s: style.cellRight };
+        
+        merges.push({ s: { r, c: 1 }, e: { r, c: 3 } });
+        ws[XLSX.utils.encode_cell({ r, c: 2 })] = { s: style.cell };
+        ws[XLSX.utils.encode_cell({ r, c: 3 })] = { s: style.cell };
+      });
 
-    const lastR = 8 + items.length;
-    ws[XLSX.utils.encode_cell({ r: lastR, c: 0 })] = { v: "합 계 (TOTAL)", s: style.header };
-    merges.push({ s: { r: lastR, c: 0 }, e: { r: lastR, c: 3 } });
-    ws[XLSX.utils.encode_cell({ r: lastR, c: 4 })] = { v: items.reduce((a, b) => a + b.count, 0), s: style.header };
-    ws[XLSX.utils.encode_cell({ r: lastR, c: 5 })] = { v: "", s: style.header };
-    ws[XLSX.utils.encode_cell({ r: lastR, c: 6 })] = { v: `₩${totalAmount.toLocaleString()}`, s: style.summary };
+      const lastR = 8 + items.length;
+      ws[XLSX.utils.encode_cell({ r: lastR, c: 0 })] = { v: "합 계 (TOTAL)", s: style.header };
+      merges.push({ s: { r: lastR, c: 0 }, e: { r: lastR, c: 3 } });
+      ws[XLSX.utils.encode_cell({ r: lastR, c: 4 })] = { v: items.reduce((a, b) => a + b.count, 0), s: style.header };
+      ws[XLSX.utils.encode_cell({ r: lastR, c: 5 })] = { v: "", s: style.header };
+      ws[XLSX.utils.encode_cell({ r: lastR, c: 6 })] = { v: `₩${totalAmount.toLocaleString()}`, s: style.summary };
 
-    const remarkR = lastR + 2;
-    ws[XLSX.utils.encode_cell({ r: remarkR, c: 0 })] = { v: "※ 비고 및 특약사항", s: { font: { bold: true, underline: true } } };
-    ws[XLSX.utils.encode_cell({ r: remarkR + 1, c: 0 })] = { v: info.remark || "특이사항 없음", s: { alignment: { wrapText: true, vertical: "top" } } };
-    merges.push({ s: { r: remarkR + 1, c: 0 }, e: { r: remarkR + 3, c: 6 } });
+      const remarkR = lastR + 2;
+      ws[XLSX.utils.encode_cell({ r: remarkR, c: 0 })] = { v: "※ 비고 및 특약사항", s: { font: { bold: true, underline: true } } };
+      ws[XLSX.utils.encode_cell({ r: remarkR + 1, c: 0 })] = { v: info.remark || "특이사항 없음", s: { alignment: { wrapText: true, vertical: "top" } } };
+      merges.push({ s: { r: remarkR + 1, c: 0 }, e: { r: remarkR + 3, c: 6 } });
 
-    ws["!merges"] = merges;
-    ws["!cols"] = [{ wch: 5 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 15 }];
-    ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: remarkR + 4, c: 6 } });
+      ws["!merges"] = merges;
+      ws["!cols"] = [{ wch: 5 }, { wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 15 }];
+      ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: remarkR + 4, c: 6 } });
 
-    XLSX.utils.book_append_sheet(wb, ws, "견적서");
+      XLSX.utils.book_append_sheet(wb, ws, "견적서");
 
-    // 모바일(iOS/Android) 호환성을 위한 Blob 다운로드 방식 적용
-    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'binary' });
-    const s2ab = (s: string) => {
-      const buf = new ArrayBuffer(s.length);
-      const view = new Uint8Array(buf);
-      for (let i = 0; i !== s.length; ++i) view[i] = s.charCodeAt(i) & 0xFF;
-      return buf;
-    };
+      // iOS에서는 writeFile이 가장 안정적입니다.
+      XLSX.writeFile(wb, `견적서_${info.customer || "미지정"}.xlsx`);
+    } catch (err) {
+      console.error("엑셀 저장 실패:", err);
+      alert("엑셀 파일 생성 중 오류가 발생했습니다.");
+    }
+  };
+
+  /**
+   * [iOS 호환] JPG 다운로드 함수
+   */
+  const executeDownload = () => {
+    if (printRef.current === null) return;
     
-    const blob = new Blob([s2ab(wbout)], { type: "application/octet-stream" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `견적서_${info.customer || "미지정"}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-    }, 100);
+    // 폰트나 이미지가 로드될 시간을 위해 약간의 딜레이를 줄 수 있음
+    toJpeg(printRef.current, { quality: 0.95, backgroundColor: '#ffffff' })
+      .then((dataUrl) => {
+        // DataURL을 직접 쓰는 대신 Blob으로 변환하여 iOS Safari 대응
+        fetch(dataUrl)
+          .then(res => res.blob())
+          .then(blob => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `견적서_${info.customer || "미지정"}.jpg`;
+            document.body.appendChild(a);
+            a.click();
+            
+            setTimeout(() => {
+              document.body.removeChild(a);
+              window.URL.revokeObjectURL(url);
+              setShowAdModal(false); 
+              setDownloadType(null);
+            }, 200);
+          });
+      })
+      .catch((err) => {
+        console.error('JPG 저장 실패:', err);
+        alert("이미지 저장에 실패했습니다.");
+      });
   };
 
   const saveToLocalStorage = () => {
@@ -206,20 +230,6 @@ export default function BillApp() {
       setShowAdModal(false);
       setDownloadType(null);
     }
-  };
-
-  const executeDownload = () => {
-    if (printRef.current === null) return;
-    toJpeg(printRef.current, { quality: 0.95, backgroundColor: '#ffffff' })
-      .then((dataUrl) => {
-        const link = document.createElement('a');
-        link.download = `견적서_${info.customer || "미지정"}.jpg`;
-        link.href = dataUrl;
-        link.click();
-        setShowAdModal(false); 
-        setDownloadType(null);
-      })
-      .catch((err) => console.error('JPG 저장 실패:', err));
   };
 
   const addItem = () => {
@@ -460,7 +470,12 @@ export default function BillApp() {
             <button 
               onClick={handleExcelClick} 
               className="bg-green-600 text-white py-4 rounded-xl font-bold text-sm md:text-sm shadow-lg active:scale-95 transition">엑셀(Excel)<br/>다운로드</button>
-            <button onClick={() => window.print()} className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition">PDF 출력 / 인쇄</button>
+            <button 
+              onClick={() => {
+                // iOS에서 print 팝업이 가끔 안뜨는 경우를 대비해 살짝 지연
+                setTimeout(() => window.print(), 200);
+              }} 
+              className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition">PDF 출력 / 인쇄</button>
           </div>
         </div>
       )}
