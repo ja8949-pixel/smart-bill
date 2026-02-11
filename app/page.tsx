@@ -277,12 +277,15 @@ setShowPreview(true); }} className="bg-blue-600 text-white px-5 py-2 rounded-ful
                 <input type="text" placeholder="사업자번호" value={info.bizNumber} className="input-style" onChange={e => handleBizNumberChange(e.target.value)} />
                 
                 {/* 날짜 입력칸: min-w-0을 주어 부모 그리드를 벗어나지 않게 고정 */}
-                <input 
-                  type="date" 
-                  className="input-style min-w-0 w-full" 
-                  value={info.date} 
-                  onChange={e => setInfo({...info, date: e.target.value})} 
-                />
+                <div className="min-w-0 w-full flex items-center">
+                  <input 
+                    type="date" 
+                    className="input-style w-full !px-1 text-[13px] md:text-sm appearance-none" 
+                    style={{ minWidth: '0', display: 'block', boxSizing: 'border-box' }}
+                    value={info.date} 
+                    onChange={e => setInfo({...info, date: e.target.value})} 
+                  />
+                </div>
                 
                 <input type="text" placeholder="받는분(귀하)" value={info.customer} className="input-style min-w-0 w-full" onChange={e => setInfo({...info, customer: e.target.value})} />
                 
