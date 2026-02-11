@@ -465,10 +465,7 @@ setShowPreview(true); }} className="bg-blue-600 text-white px-5 py-2 rounded-ful
             <h3 className="text-xl font-black">다운로드 준비 완료!</h3>
             <p className="text-sm text-slate-500">아래 광고를 클릭하시면 파일 저장이 시작됩니다.</p>
             <div onClick={handleAdConfirm} className="cursor-pointer border border-blue-100 rounded-2xl overflow-hidden">
-              <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" id="btn_ad_medicok" href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" onClick={() => trackEvent('click_ad_image', '메디콕 광고 이미지 클릭')} className="block">
-                <img src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Dis_20251117151015.jpg" className="w-full" />
-                <div className="p-3 bg-blue-50 text-blue-700 font-bold text-sm">맞춤형 건강기능식품 메디콕! (클릭 시 저장)</div>
-              </a>
+              <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" id="btn_ad_medicok" onClick={() => trackEvent('click_ad_image', '메디콕 광고 이미지 클릭')} className="block"><img src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Dis_20251117151015.jpg" className="w-full" /><div className="p-3 bg-blue-50 text-blue-700 font-bold text-sm">맞춤형 건강기능식품 메디콕! (클릭 시 저장)</div></a>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-4">
               <button onClick={() => setShowAdModal(false)} className="py-4 rounded-2xl bg-gray-100 font-bold text-slate-400">취소</button>
