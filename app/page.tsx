@@ -277,15 +277,12 @@ setShowPreview(true); }} className="bg-blue-600 text-white px-5 py-2 rounded-ful
                 <input type="text" placeholder="사업자번호" value={info.bizNumber} className="input-style" onChange={e => handleBizNumberChange(e.target.value)} />
                 
                 {/* 날짜 입력칸: min-w-0을 주어 부모 그리드를 벗어나지 않게 고정 */}
-               <div className="min-w-0 w-full overflow-hidden">
-                  <input 
-                    type="date" 
-                    className="input-style w-full overflow-hidden" 
-                    style={{ maxWidth: '100%', display: 'block' }} // 강제로 너비 제한
-                    value={info.date} 
-                    onChange={e => setInfo({...info, date: e.target.value})} 
-                  />
-                </div>
+                <input 
+                  type="date" 
+                  className="input-style min-w-0 w-full" 
+                  value={info.date} 
+                  onChange={e => setInfo({...info, date: e.target.value})} 
+                />
                 
                 <input type="text" placeholder="받는분(귀하)" value={info.customer} className="input-style min-w-0 w-full" onChange={e => setInfo({...info, customer: e.target.value})} />
                 
@@ -424,7 +421,7 @@ setShowPreview(true); }} className="bg-blue-600 text-white px-5 py-2 rounded-ful
                       const p = item ? Number(item.price) || 0 : 0;
                       
                       return (
-                        <tr key={item?.id || i} className="h-7 text-center">
+                        <tr key={item?.id || i} className="h-8 text-center">
                           <td className="border border-black text-slate-400">{i + 1}</td>
                           <td className="border border-black text-left px-3 font-bold">
                             {item ? `${item.name} ` : ''}
