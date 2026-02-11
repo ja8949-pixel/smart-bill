@@ -23,6 +23,16 @@ interface MasterInfo {
   remark: string;
 }
 
+// GA 트래킹 공통함수
+const trackEvent = (action: string, label: string) => {
+  if (typeof window !== 'undefined' && (window as any).gtag) {
+    (window as any).gtag('event', action, {
+      'event_category': 'Engagement',
+      'event_label': label
+    });
+  }
+};
+
 export default function BillApp() {
   const [info, setInfo] = useState<MasterInfo>({
     provider: '', 
@@ -55,6 +65,17 @@ export default function BillApp() {
     const onlyNum = val.replace(/[^0-9]/g, '');
     if (onlyNum.length <= 10) setInfo({ ...info, bizNumber: onlyNum });
   };
+
+  const resetAll = () => {
+  if (confirm("입력하신 모든 정보가 삭제됩니다. 초기화할까요?")) {
+    setInfo({
+      provider: '', bizNumber: '', address: '', category: '', sector: '', customer: '',
+      date: new Date().toISOString().split('T')[0], remark: ''
+    });
+    setItems([{ id: Date.now(), name: '', spec: '', count: '', price: '' }]);
+    setStampImage(null);
+  }
+};
 
   /**
    * 엑셀 다운로드 (ExcelJS)
@@ -225,7 +246,8 @@ const exportToExcel = async () => {
         </div>
         <header className="bg-white border-b px-4 py-3 sticky top-0 z-20 flex justify-between items-center shadow-sm">
           <img src="/images/smart_bill_logo.jpg" alt="로고" className="h-14 w-14" />
-          <button onClick={() => setShowPreview(true)} className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold text-sm shadow-lg">미리보기/다운로드</button>
+          <button id="btn_preview_open" onClick={() => {trackEvent('click_preview', '미리보기 버튼 클릭');
+setShowPreview(true); }} className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold text-sm shadow-lg">미리보기/다운로드</button>
         </header>
 
         <main className="max-w-7xl mx-auto p-4 flex flex-col lg:flex-row gap-6">
@@ -235,10 +257,22 @@ const exportToExcel = async () => {
             </section>
 
             <section className="bg-white rounded-2xl p-5 shadow-sm space-y-4 border border-zinc-200">
+            {/* 헤더 부분: 제목과 버튼을 한 줄에 배치 */}
+            <div className="flex justify-between items-center border-b border-gray-50 pb-2">
               <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">사업자 정보</h2>
+              <button 
+                onClick={resetAll}
+                className="text-[10px] font-bold text-red-500 hover:text-red-700 flex items-center gap-1 transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                모두 지우기
+              </button>
+            </div>
               
               {/* grid에 gap-3을 유지하면서 각 항목이 동일한 비율을 갖도록 설정 */}
-              <div className="grid grid-cols-2 gap-3 w-full">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
                 <input type="text" placeholder="사업자명" value={info.provider} className="input-style" onChange={e => setInfo({...info, provider: e.target.value})} />
                 <input type="text" placeholder="사업자번호" value={info.bizNumber} className="input-style" onChange={e => handleBizNumberChange(e.target.value)} />
                 
@@ -293,7 +327,7 @@ const exportToExcel = async () => {
                 <div key={item.id} className="bg-white rounded-xl p-4 shadow-sm border border-zinc-200 flex flex-col gap-3">
                   <input type="text" placeholder="품명" value={item.name} className="border-b text-sm outline-none pb-1 font-medium" onChange={e => updateItem(item.id, 'name', e.target.value)} />
                   <div className="grid grid-cols-3 gap-2">
-                    <input type="text" placeholder="규격" value={item.spec} className="border-b text-xs outline-none pb-1" onChange={e => updateItem(item.id, 'spec', e.target.value)} />
+                    <input type="text" placeholder="(규격)" value={item.spec} className="border-b text-xs outline-none pb-1" onChange={e => updateItem(item.id, 'spec', e.target.value)} />
                     <input type="number" placeholder="수량" value={item.count} className="border-b text-xs outline-none pb-1" onChange={e => updateItem(item.id, 'count', e.target.value)} />
                     <input type="number" placeholder="단가" value={item.price} className="border-b text-xs outline-none pb-1" onChange={e => updateItem(item.id, 'price', e.target.value)} />
                   </div>
@@ -309,111 +343,118 @@ const exportToExcel = async () => {
       </div>
 
       {showPreview && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex flex-col items-center justify-start overflow-y-auto pt-4 pb-20 px-2">
-          <div className="w-full max-w-[800px] flex justify-end mb-2">
-            <button onClick={() => setShowPreview(false)} className="bg-white/20 text-white w-10 h-10 rounded-full text-xl">✕</button>
-          </div>
-          
+      <div className="fixed inset-0 z-50 bg-black/80 flex flex-col items-center justify-start overflow-y-auto pt-4 pb-20 px-2">
+        <div className="w-full max-w-[800px] flex justify-end mb-2">
+          <button onClick={() => setShowPreview(false)} className="bg-white/20 text-white w-10 h-10 rounded-full text-xl">✕</button>
+        </div>
+        
           <div className="preview-container bg-white shadow-2xl origin-top">
-            <div ref={printRef} className="p-10 md:p-14 bg-white">
-              <h1 className="text-4xl md:text-5xl text-center font-bold tracking-[1.5rem] md:tracking-[2.5rem] mb-12 border-b-4 border-double border-black pb-4">견 적 서</h1>
-              <div className="flex justify-between items-start gap-8 mb-10 text-left">
-                <div className="flex-1">
-                  <p className="text-[12px] text-slate-500 mb-2 font-medium">일자: {info.date.replace(/-/g, '. ')}</p>
-                  <p className="text-2xl font-bold border-b-2 border-black pb-1 inline-block min-w-[200px]">{info.customer || '            '} <span className="text-lg font-normal">귀하</span></p>
-                  <p className="text-sm mt-3 text-slate-600 font-medium">아래와 같이 견적합니다.</p>
-                  <div className="mt-4 text-2xl font-black">합계금액: ₩{totalAmount.toLocaleString()}</div>
+            {/* A4 규격 고정: 794px * 1123px */}
+            <div ref={printRef} className="p-10 md:p-14 bg-white w-[794px] h-[1123px] flex flex-col justify-between overflow-hidden shrink-0">
+              <div>
+                <h1 className="text-4xl md:text-5xl text-center font-bold tracking-[1.5rem] md:tracking-[2.5rem] mb-12 border-b-4 border-double border-black pb-4">견 적 서</h1>
+                
+                <div className="flex justify-between items-start gap-8 mb-10 text-left">
+                  <div className="flex-1">
+                    <p className="text-[12px] text-slate-500 mb-2 font-medium">일자: {info.date.replace(/-/g, '. ')}</p>
+                    <p className="text-2xl font-bold border-b-2 border-black pb-1 inline-block min-w-[200px]">{info.customer || '            '} <span className="text-lg font-normal">귀하</span></p>
+                    <p className="text-sm mt-3 text-slate-600 font-medium">아래와 같이 견적합니다.</p>
+                    <div className="mt-4 text-2xl font-black">합계금액: ₩{totalAmount.toLocaleString()}</div>
+                  </div>
+
+                  <div className="w-[400px] shrink-0">
+                    <table className="border-collapse border-2 border-black w-full text-[11px] table-fixed">
+                      <tbody>
+                        <tr>
+                          <td className="border border-black p-1 text-center bg-slate-100 font-bold w-10" rowSpan={4}>공<br/>급<br/>자</td>
+                          <td className="border border-black p-2 bg-slate-100 font-bold text-center w-20">등록번호</td>
+                          <td className="border border-black p-2 font-bold" colSpan={3}>
+                            {info.bizNumber.length === 10 
+                              ? info.bizNumber.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3') 
+                              : info.bizNumber}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-2 bg-slate-100 font-bold text-center">상호</td>
+                          <td className="border border-black p-2 font-bold">{info.provider}</td>
+                          <td className="border border-black p-2 bg-slate-100 font-bold text-center">서명</td>
+                          <td className="border border-black p-0 text-center relative w-[80px]">
+                            <div className="absolute inset-0 flex items-center justify-end pr-3 font-bold text-[13px] z-0 opacity-40">(인)</div>
+                            {stampImage && (
+                              <div className="relative z-10 flex justify-end items-center h-full pr-1">
+                                <img src={stampImage} className="w-12 h-12 object-contain mix-blend-multiply" alt="도장" />
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-2 bg-slate-100 font-bold text-center">주소</td>
+                          <td className="border border-black p-2 text-[10px]" colSpan={3}>{info.address}</td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-2 bg-slate-100 font-bold text-center">업태</td>
+                          <td className="border border-black p-2 text-center">{info.category}</td>
+                          <td className="border border-black p-2 bg-slate-100 font-bold text-center">종목</td>
+                          <td className="border border-black p-2 text-center">{info.sector}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
 
-                <div className="w-[400px] shrink-0">
-                  <table className="border-collapse border-2 border-black w-full text-[11px] table-fixed">
-                    <tbody>
-                      <tr>
-                        <td className="border border-black p-1 text-center bg-slate-100 font-bold w-10" rowSpan={4}>공<br/>급<br/>자</td>
-                        <td className="border border-black p-2 bg-slate-100 font-bold text-center w-20">등록번호</td>
-                        <td className="border border-black p-2 font-bold" colSpan={3}>
-                          {info.bizNumber.length === 10 
-                            ? info.bizNumber.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3') 
-                            : info.bizNumber}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black p-2 bg-slate-100 font-bold text-center">상호</td>
-                        <td className="border border-black p-2 font-bold">{info.provider}</td>
-                        <td className="border border-black p-2 bg-slate-100 font-bold text-center">서명</td>
-                        <td className="border border-black p-0 text-center relative w-[80px]">
-                        {/* 1. (인) 표시: 약간 흐리게(opacity-40) 설정 */}
-                        <div className="absolute inset-0 flex items-center justify-end pr-3 font-bold text-[13px] z-0 opacity-40">
-                          (인)
-                        </div>
-
-                        {/* 2. 도장 이미지: flex를 사용해 강제로 우측 끝으로 정렬 */}
-                        {stampImage && (
-                          <div className="relative z-10 flex justify-end items-center h-full pr-1">
-                            <img 
-                              src={stampImage} 
-                              className="w-12 h-12 object-contain mix-blend-multiply" 
-                              alt="도장"
-                            />
-                          </div>
-                        )}
-                      </td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black p-2 bg-slate-100 font-bold text-center">주소</td>
-                        <td className="border border-black p-2 text-[10px]" colSpan={3}>{info.address}</td>
-                      </tr>
-                      <tr>
-                        <td className="border border-black p-2 bg-slate-100 font-bold text-center">업태</td>
-                        <td className="border border-black p-2 text-center">{info.category}</td>
-                        <td className="border border-black p-2 bg-slate-100 font-bold text-center">종목</td>
-                        <td className="border border-black p-2 text-center">{info.sector}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                {/* 품목 테이블: 최소 7줄 유지 */}
+                <table className="w-full border-collapse border-2 border-black text-[12px] mb-8">
+                  <thead className="bg-slate-100 font-bold text-center h-10">
+                    <tr>
+                      <td className="border border-black w-10">NO</td>
+                      <td className="border border-black">품 명 / 규 격</td>
+                      <td className="border border-black w-14">수 량</td>
+                      <td className="border border-black w-28">단 가</td>
+                      <td className="border border-black w-32">금 액</td>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* 최소 7줄을 보장하기 위해 빈 배열 생성 후 맵핑 */}
+                    {Array.from({ length: Math.max(10, items.length) }).map((_, i) => {
+                      const item = items[i];
+                      const c = item ? Number(item.count) || 0 : 0;
+                      const p = item ? Number(item.price) || 0 : 0;
+                      
+                      return (
+                        <tr key={item?.id || i} className="h-10 text-center">
+                          <td className="border border-black text-slate-400">{i + 1}</td>
+                          <td className="border border-black text-left px-3 font-bold">
+                            {item ? `${item.name} ` : ''}
+                            {item?.spec && <span className="font-normal text-slate-500 text-[10px] ml-1">({item.spec})</span>}
+                          </td>
+                          <td className="border border-black">{item?.count || ''}</td>
+                          <td className="border border-black text-right px-2">{p ? p.toLocaleString() : ''}</td>
+                          <td className="border border-black text-right px-2 font-bold">{(c * p) ? (c * p).toLocaleString() : ''}</td>
+                        </tr>
+                      );
+                    })}
+                    <tr className="h-11 bg-slate-50 font-bold text-center">
+                      <td className="border border-black" colSpan={2}>합 계</td>
+                      <td className="border border-black">{items.reduce((a, b) => a + (Number(b.count) || 0), 0) || ''}</td>
+                      <td className="border border-black"></td>
+                      <td className="border border-black text-right px-2 text-blue-800">₩{totalAmount.toLocaleString()}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
 
-              <table className="w-full border-collapse border-2 border-black text-[12px] mb-8">
-                <thead className="bg-slate-100 font-bold text-center h-10">
-                  <tr>
-                    <td className="border border-black w-10">NO</td><td className="border border-black">품 명 / 규 격</td>
-                    <td className="border border-black w-14">수 량</td><td className="border border-black w-28">단 가</td><td className="border border-black w-32">금 액</td>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((item, i) => {
-                    const c = Number(item.count) || 0;
-                    const p = Number(item.price) || 0;
-                    return (
-                      <tr key={item.id} className="h-10 text-center">
-                        <td className="border border-black text-slate-400">{i + 1}</td>
-                        <td className="border border-black text-left px-3 font-bold">{item.name} {item.spec && <span className="font-normal text-slate-500 text-[10px] ml-1">({item.spec})</span>}</td>
-                        <td className="border border-black">{item.count}</td>
-                        <td className="border border-black text-right px-2">{p ? p.toLocaleString() : ''}</td>
-                        <td className="border border-black text-right px-2 font-bold">{ (c * p) ? (c * p).toLocaleString() : ''}</td>
-                      </tr>
-                    );
-                  })}
-                  <tr className="h-11 bg-slate-50 font-bold text-center">
-                    <td className="border border-black" colSpan={2}>합 계</td>
-                    <td className="border border-black">{items.reduce((a, b) => a + (Number(b.count) || 0), 0) || ''}</td>
-                    <td className="border border-black"></td>
-                    <td className="border border-black text-right px-2 text-blue-800">₩{totalAmount.toLocaleString()}</td>
-                  </tr>
-                </tbody>
-              </table>
-              <div className="border-2 border-black p-5 text-[11px] bg-slate-50/50 whitespace-pre-wrap text-left">
+              {/* 하단 고정 비고란 */}
+              <div className="border-2 border-black p-5 flex-1 h-[300px] text-[11px] bg-slate-50/50 whitespace-pre-wrap text-left mt-auto">
                 <p className="font-bold underline mb-2">※ 비고 및 특약사항</p>
                 <p>{info.remark || "특이사항 없음"}</p>
               </div>
             </div>
           </div>
 
+          {/* 하단 버튼 바 */}
           <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/90 grid grid-cols-2 gap-2 no-print z-[60]">
-            <button onClick={() => { setDownloadType('JPG'); setShowAdModal(true); }} className="bg-white py-4 rounded-xl font-bold text-sm">이미지 다운로드</button>
-            {/* <button onClick={() => { setDownloadType('XLSX'); setShowAdModal(true); }} className="bg-green-600 text-white py-4 rounded-xl font-bold text-sm">엑셀 다운로드</button> */}
-            <button onClick={() => setTimeout(() => window.print(), 200)} className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm">PDF 인쇄</button>
+            <button id="btn_download_jpg" onClick={() => { trackEvent('click_download_jpg', 'JPG 다운로드 시도'); setDownloadType('JPG'); setShowAdModal(true); }} className="bg-white py-4 rounded-xl font-bold text-sm">이미지 다운로드</button>
+            <button id="btn_print_pdf" onClick={() => { trackEvent('click_print_pdf', 'PDF 인쇄 버튼 클릭'); setTimeout(() => window.print(), 200); }} className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm">PDF 인쇄</button>
           </div>
         </div>
       )}
@@ -424,14 +465,14 @@ const exportToExcel = async () => {
             <h3 className="text-xl font-black">다운로드 준비 완료!</h3>
             <p className="text-sm text-slate-500">아래 광고를 클릭하시면 파일 저장이 시작됩니다.</p>
             <div onClick={handleAdConfirm} className="cursor-pointer border border-blue-100 rounded-2xl overflow-hidden">
-              <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" className="block">
+              <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" id="btn_ad_medicok" href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" onClick={() => trackEvent('click_ad_image', '메디콕 광고 이미지 클릭')} className="block">
                 <img src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Dis_20251117151015.jpg" className="w-full" />
                 <div className="p-3 bg-blue-50 text-blue-700 font-bold text-sm">맞춤형 건강기능식품 메디콕! (클릭 시 저장)</div>
               </a>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-4">
               <button onClick={() => setShowAdModal(false)} className="py-4 rounded-2xl bg-gray-100 font-bold text-slate-400">취소</button>
-              <button onClick={handleAdConfirm} className="py-4 rounded-2xl bg-blue-600 text-white font-bold">광고 보고 저장하기</button>
+              <button id="btn_ad_confirm_save" onClick={() => { trackEvent('click_ad_save_action', '광고 확인 후 최종 저장 클릭'); handleAdConfirm(); }} className="py-4 rounded-2xl bg-blue-600 text-white font-bold">광고 보고 저장하기</button>
             </div>
           </div>
         </div>
