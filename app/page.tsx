@@ -241,13 +241,29 @@ const exportToExcel = async () => {
     <div className="min-h-screen bg-gray-100 font-sans text-slate-900 pb-10">
       <div className="no-print">
         {/* 최상단 홍보 문구 라인 */}
-        <div className="bg-blue-700 text-white text-center py-2 px-4 font-bold text-sm md:text-base">
-          📢 복잡한 견적서 작업 그만!<br/> 누구나 10초면 뚝딱 만드는 무료 견적서
+        <div className="bg-orange-500 text-white py-4 px-6 shadow-md text-center">
+          <p className="text-xs md:text-sm font-medium opacity-90 mb-1">
+            복잡한 견적서 작업은 이제 그만!
+          </p>
+          <h2 className="text-lg md:text-2xl font-extrabold tracking-tight">
+            누구나 <span className="text-yellow-300">10초면 뚝딱</span> 만드는 무료 견적서 📝
+          </h2>
         </div>
         <header className="bg-white border-b px-4 py-3 sticky top-0 z-20 flex justify-between items-center shadow-sm">
           <img src="/images/smart_bill_logo.jpg" alt="로고" className="h-14 w-14" />
-          <button id="btn_preview_open" onClick={() => {trackEvent('click_preview', '미리보기 버튼 클릭');
-setShowPreview(true); }} className="bg-blue-600 text-white px-5 py-2 rounded-full font-bold text-sm shadow-lg">미리보기/다운로드</button>
+          <div className="flex flex-col items-center gap-2">
+          <button 
+            id="btn_preview_open" 
+            onClick={() => {
+              trackEvent('click_preview', '미리보기 버튼 클릭');
+              setShowPreview(true); 
+            }} 
+            className="bg-[#FF7E36] text-white px-8 py-4 rounded-2xl font-extrabold text-lg shadow-[0_4px_14px_0_rgba(255,126,54,0.39)] hover:scale-105 transition-transform animate-bounce-subtle"
+          >
+            🚀 10초 만에 결과물 확인하기
+          </button>
+          <span className="text-[11px] text-gray-500 font-medium">가입 없이 무료로 바로 다운로드</span>
+        </div>
         </header>
 
         <main className="max-w-7xl mx-auto p-4 flex flex-col lg:flex-row gap-6">
