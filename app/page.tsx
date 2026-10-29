@@ -20,6 +20,33 @@ const PROFILES_KEY = 'smartbill.profiles.v1';
 const LAST_PROFILE_KEY = 'smartbill.lastProfile.v1';
 
 const STEP_TITLES = ['받는 분', '내 정보', '견적 내용', '확인'];
+const DRAFT_KEY = 'smartbill.draft.v1';   // 작성 중 내용 (화면이 꺼지거나 새로고침해도 이어서)
+
+// ── 쿠팡 파트너스 광고 카드 ─────────────────────────────────────
+//  위젯 ID 는 쿠팡 파트너스 > 위젯 만들기에서 발급. 상품 구성(공구·장갑·건강식품 등)은 거기서 바꾼다.
+//  50~60대가 보기 편하게: 큰 제목 + 한 줄 설명 + 카드 테두리. 파트너스 규정상 고지 문구 필수.
+const COUPANG_IDS = ['963189', '964078'];
+const COUPANG_TRACK = 'AF4084126';
+const COUPANG_W = 330;   // 폰(390px) 안에서 가로 스크롤이 안 생기는 폭
+function CoupangAd({ slot, title, sub }: { slot: number; title: string; sub?: string }) {
+  const id = COUPANG_IDS[slot % COUPANG_IDS.length];
+  return (
+    <aside className="bg-white rounded-2xl border-2 border-amber-200 overflow-hidden">
+      <div className="px-4 pt-3 pb-2 bg-amber-50/60">
+        <p className="text-base font-extrabold text-slate-800">{title}</p>
+        {sub && <p className="text-[13px] text-slate-500 mt-0.5">{sub}</p>}
+      </div>
+      <div className="flex justify-center py-2">
+        <iframe
+          src={`https://ads-partners.coupang.com/widgets.html?id=${id}&template=carousel&trackingCode=${COUPANG_TRACK}&width=${COUPANG_W}&height=180`}
+          width={COUPANG_W} height="180" frameBorder="0" scrolling="no" loading="lazy" title="쿠팡 추천 상품"
+          onLoad={() => trackEvent('coupang_widget_view', `slot${slot}`)}
+        />
+      </div>
+      <p className="px-4 pb-2 text-[11px] text-slate-400 leading-snug">이 서비스는 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</p>
+    </aside>
+  );
+}
 
 const QUICK_EXAMPLE = `공급자: 일광페인팅
 홍길동 귀하
@@ -75,6 +102,9 @@ export default function BillApp() {
   const [items, setItems] = useState<BillItem[]>([{ id: Date.now(), name: '', spec: '', count: 1, price: '' }]);
   const [step, setStep] = useState(1);
   const [showQuick, setShowQuick] = useState(false);
+  const [doneMsg, setDoneMsg] = useState('');          // 다운로드 완료 안내
+  const [draftMsg, setDraftMsg] = useState('');        // 작성 중 내용 복원 안내
+  const draftReady = useRef(false);                    // 복원이 끝난 뒤부터 저장 시작
   const [stampImage, setStampImage] = useState<string | null>(null);
   const [stampOriginal, setStampOriginal] = useState<string | null>(null); // 누끼 전 원본 (되돌리기용)
   const [stampBusy, setStampBusy] = useState(false);
@@ -142,8 +172,33 @@ export default function BillApp() {
     const p = list.find(x => x.provider === last);
     if (p) { applyProfile(p); setProfileMsg(`지난번 정보(${p.provider})를 자동으로 불러왔어요.`); }
     if (!localStorage.getItem('smartbill.guideSeen')) setShowGuide(true);
+    // 작성하던 내용이 있으면 이어서 (전화·화면 꺼짐·새로고침 대비)
+    try {
+      const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+      const hasContent = d && (d.info?.customer || d.items?.some((i: BillItem) => String(i.name).trim()));
+      if (hasContent) {
+        setInfo(prev => ({ ...prev, ...d.info }));
+        setItems(d.items);
+        setVatMode(d.vatMode || 'none');
+        setStep(Math.min(4, Math.max(1, d.step || 1)));
+        setDraftMsg('작성하던 내용을 그대로 불러왔어요.');
+      }
+    } catch {}
+    draftReady.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 입력할 때마다 작성 중 내용을 이 기기에 저장 (도장은 사업자 정보 쪽에 저장됨)
+  useEffect(() => {
+    if (!draftReady.current) return;
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ info, items, vatMode, step })); } catch {}
+  }, [info, items, vatMode, step]);
+
+  const startFresh = () => {
+    localStorage.removeItem(DRAFT_KEY);
+    setDraftMsg('');
+    resetAll(true);
+  };
 
   const saveProfile = async (silent = false) => {
     const name = info.provider.trim();
@@ -237,8 +292,9 @@ export default function BillApp() {
     if (onlyNum.length <= 10) setInfo({ ...info, bizNumber: onlyNum });
   };
 
-  const resetAll = () => {
-  if (confirm("입력하신 모든 정보가 삭제됩니다. 초기화할까요?")) {
+  const resetAll = (skipConfirm = false) => {
+  if (skipConfirm || confirm("입력하신 모든 정보가 삭제됩니다. 초기화할까요?")) {
+    localStorage.removeItem(DRAFT_KEY);
     setInfo({
       provider: '', bizNumber: '', address: '', category: '', sector: '', customer: '',
       date: new Date().toISOString().split('T')[0], remark: ''
@@ -401,6 +457,7 @@ const exportToExcel = async () => {
       a.href = url; a.download = `견적서_${info.customer || "미지정"}.xlsx`;
       document.body.appendChild(a); a.click();
       window.URL.revokeObjectURL(url); document.body.removeChild(a);
+      setDoneMsg('엑셀 파일이 저장됐어요.\n다운로드 폴더에서 확인하세요.');
     } catch (err) { alert("엑셀 저장 실패"); }
   };
 
@@ -413,6 +470,7 @@ const exportToExcel = async () => {
         document.body.appendChild(a); a.click();
         document.body.removeChild(a);
         setShowAdModal(false); setDownloadType(null);
+        setDoneMsg('견적서 이미지가 저장됐어요.\n폰은 갤러리(사진), 컴퓨터는 다운로드 폴더에서 확인하세요.');
       });
   };
 
@@ -455,11 +513,19 @@ const exportToExcel = async () => {
           <div className="max-w-xl mx-auto flex items-center gap-3">
             <img src="/images/smart_bill_logo.jpg" alt="로고" className="h-12 w-12 rounded-xl" />
             <div className="flex-1 min-w-0">
-              <h1 className="text-lg font-extrabold text-slate-900 leading-tight">무료 견적서 만들기</h1>
-              <p className="text-[13px] text-slate-500">가입 없이 · 10초면 완성 · 내용은 내 폰에만 저장</p>
+              <h1 className="text-lg font-extrabold text-slate-900 leading-tight truncate">견적서 만들기</h1>
+              <p className="text-[12px] text-slate-500 truncate">무료 · 가입 없음 · 내 폰에만 저장</p>
             </div>
-            <button onClick={resetAll} className="text-[13px] font-bold text-slate-400 hover:text-red-500 px-2 py-2">모두 지우기</button>
+            <button id="btn-preview-any" onClick={() => { trackEvent('click_preview_any', `step${step}`); setShowPreview(true); }}
+                    className="text-[14px] font-extrabold text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 whitespace-nowrap">👁 미리보기</button>
+            <button onClick={() => resetAll()} className="text-[13px] font-bold text-slate-400 hover:text-red-500 px-1 py-2 whitespace-nowrap">지우기</button>
           </div>
+          {draftMsg && (
+            <div id="draft-msg" className="max-w-xl mx-auto mt-2 flex items-center justify-between gap-2 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-[14px] text-green-800">
+              <span>↩️ {draftMsg}</span>
+              <button onClick={startFresh} className="shrink-0 font-bold text-green-700 underline">새로 시작</button>
+            </div>
+          )}
           {/* 진행 단계 */}
           <ol className="max-w-xl mx-auto mt-3 grid grid-cols-4 gap-1">
             {STEP_TITLES.map((t, i) => {
@@ -509,6 +575,7 @@ const exportToExcel = async () => {
                   <p className="mt-1">한 번 적은 사업자 정보와 도장은 다음부터 자동으로 채워져요.</p>
                 </div>
               )}
+              <CoupangAd slot={0} title="🛒 사장님들이 많이 찾는 상품" sub="로켓배송 — 오늘 주문하면 내일 도착해요" />
             </section>
           )}
 
@@ -605,9 +672,7 @@ const exportToExcel = async () => {
                 <button onClick={() => deleteProfile(info.provider.trim())} className="w-full text-[14px] text-slate-400 underline py-1">'{info.provider.trim()}' 저장 정보 지우기</button>
               )}
 
-              <div className="flex justify-center bg-white rounded-2xl p-2 border border-zinc-200">
-                <iframe src="https://ads-partners.coupang.com/widgets.html?id=963189&template=carousel&trackingCode=AF4084126&width=360&height=180" width="360" height="180" frameBorder="0" scrolling="no" loading="lazy"></iframe>
-              </div>
+              <CoupangAd slot={1} title="🧰 현장 필수품 한 번에 보기" sub="장갑·공구·안전용품, 떨어지기 전에 챙기세요" />
             </section>
           )}
 
@@ -697,6 +762,7 @@ const exportToExcel = async () => {
                 <span className="text-base font-bold">지금까지 합계</span>
                 <span className="text-2xl font-black">{supplyAmount.toLocaleString()}원</span>
               </div>
+              <CoupangAd slot={0} title="🧤 작업 소모품도 같이 챙기세요" sub="견적 넣은 김에 자재·소모품 미리 준비" />
             </section>
           )}
 
@@ -751,9 +817,7 @@ const exportToExcel = async () => {
                 <textarea placeholder="예: 계약금 30% 선입금, 자재 변경 시 별도 협의" value={info.remark} className="input-style h-24 !text-base" onChange={e => setInfo({ ...info, remark: e.target.value })} />
               </label>
 
-              <div className="flex justify-center bg-white rounded-2xl p-2 border border-zinc-200">
-                <iframe src="https://ads-partners.coupang.com/widgets.html?id=964078&template=carousel&trackingCode=AF4084126&width=360&height=180" width="360" height="180" frameBorder="0" scrolling="no" loading="lazy"></iframe>
-              </div>
+              <CoupangAd slot={1} title="🎁 거래처에 함께 보내면 좋은 선물" sub="견적서와 같이 챙기면 계약이 더 잘 돼요" />
             </section>
           )}
         </main>
@@ -903,10 +967,29 @@ const exportToExcel = async () => {
             </div>
           </div>
 
+          {/* 미리보기 아래: 결과를 보며 기다리는 동안 */}
+          <div className="w-full max-w-[800px] mt-4 no-print">
+            <CoupangAd slot={0} title="📦 견적서 보냈다면, 자재도 미리 준비하세요" sub="사장님들이 많이 주문하는 현장 용품" />
+          </div>
+
           {/* 하단 버튼 바 */}
           <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/90 grid grid-cols-2 gap-2 no-print z-[60]">
             <button id="btn_download_jpg" onClick={() => { trackEvent('click_download_jpg', 'JPG 다운로드 시도'); setDownloadType('JPG'); setShowAdModal(true); }} className="bg-white py-4 rounded-xl font-bold text-sm">이미지 다운로드</button>
             <button id="btn_print_pdf" onClick={() => { trackEvent('click_print_pdf', 'PDF 인쇄 버튼 클릭'); setTimeout(() => window.print(), 200); }} className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm">PDF 인쇄</button>
+          </div>
+        </div>
+      )}
+
+      {doneMsg && (
+        <div className="fixed inset-0 z-[110] bg-black/80 flex items-center justify-center p-4 no-print">
+          <div id="done-msg" className="bg-white rounded-3xl p-6 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="text-center">
+              <div className="text-5xl mb-2">✅</div>
+              <h3 className="text-xl font-black text-slate-900">저장됐어요!</h3>
+              <p className="text-[15px] text-slate-600 mt-2 whitespace-pre-line leading-relaxed">{doneMsg}</p>
+            </div>
+            <CoupangAd slot={1} title="💡 이런 상품도 많이 봐요" sub="오늘 주문하면 내일 도착" />
+            <button onClick={() => setDoneMsg('')} className="w-full py-4 rounded-2xl bg-blue-600 text-white font-extrabold text-lg">확인</button>
           </div>
         </div>
       )}
