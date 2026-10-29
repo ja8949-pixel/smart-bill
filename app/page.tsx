@@ -19,6 +19,8 @@ interface SavedProfile {
 const PROFILES_KEY = 'smartbill.profiles.v1';
 const LAST_PROFILE_KEY = 'smartbill.lastProfile.v1';
 
+const STEP_TITLES = ['받는 분', '내 정보', '견적 내용', '확인'];
+
 const QUICK_EXAMPLE = `공급자: 일광페인팅
 홍길동 귀하
 15평기준
@@ -69,7 +71,10 @@ export default function BillApp() {
     remark: ''
   });
 
-  const [items, setItems] = useState<BillItem[]>([{ id: Date.now(), name: '', spec: '', count: '', price: '' }]);
+  // 수량은 1로 시작 — 비워 둬서 금액에서 빠지는 일을 애초에 막는다
+  const [items, setItems] = useState<BillItem[]>([{ id: Date.now(), name: '', spec: '', count: 1, price: '' }]);
+  const [step, setStep] = useState(1);
+  const [showQuick, setShowQuick] = useState(false);
   const [stampImage, setStampImage] = useState<string | null>(null);
   const [stampOriginal, setStampOriginal] = useState<string | null>(null); // 누끼 전 원본 (되돌리기용)
   const [stampBusy, setStampBusy] = useState(false);
@@ -197,6 +202,7 @@ export default function BillApp() {
     if (r.statedTotal && r.statedTotal !== calc) msg += `\n⚠️ 적어 주신 TOTAL ${r.statedTotal.toLocaleString()}원과 계산 합계 ${calc.toLocaleString()}원이 달라요. 항목을 한 번 확인해 주세요.`;
     setQuickMsg(msg);
     trackEvent('quick_text_apply', `${r.items.length} items`);
+    setShowQuick(false);   // 결과(항목 카드)가 바로 보이게 입력창은 접는다
     setTimeout(() => document.getElementById('items-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
   };
 
@@ -237,10 +243,12 @@ export default function BillApp() {
       provider: '', bizNumber: '', address: '', category: '', sector: '', customer: '',
       date: new Date().toISOString().split('T')[0], remark: ''
     });
-    setItems([{ id: Date.now(), name: '', spec: '', count: '', price: '' }]);
+    setItems([{ id: Date.now(), name: '', spec: '', count: 1, price: '' }]);
     setStampImage(null);
     setStampOriginal(null);
     setVatMode('none');
+    setQuickText(''); setQuickMsg(''); setProfileMsg('');
+    setStep(1);
   }
 };
 
@@ -328,8 +336,9 @@ const exportToExcel = async () => {
       });
       sheet.mergeCells(startRow, 2, startRow, 4);
 
-      // 5. 품목 데이터 (테두리 전체 적용)
-      items.forEach((item, i) => {
+      // 5. 품목 데이터 (테두리 전체 적용) — 품명 없는 빈 줄은 제외
+      const rows = items.filter(i => i.name.trim());
+      rows.forEach((item, i) => {
         const r = startRow + 1 + i;
         const count = Number(item.count) || 0;
         const price = Number(item.price) || 0;
@@ -351,7 +360,7 @@ const exportToExcel = async () => {
       });
 
       // 6. 공급가액·부가세 행 (부가세 포함 계산일 때만) + 합계행
-      let tr = startRow + 1 + items.length;
+      let tr = startRow + 1 + rows.length;
       if (withVat) {
         [["공 급 가 액", supplyAmount], ["부 가 세 (10%)", vatAmount]].forEach(([label, val]) => {
           sheet.mergeCells(tr, 1, tr, 6);
@@ -365,7 +374,7 @@ const exportToExcel = async () => {
       }
       sheet.mergeCells(tr, 1, tr, 4);
       sheet.getCell(tr, 1).value = "합 계 (TOTAL)";
-      sheet.getCell(tr, 5).value = items.reduce((a, b) => a + (Number(b.count) || 0), 0) || '';
+      sheet.getCell(tr, 5).value = rows.reduce((a, b) => a + (Number(b.count) || 0), 0) || '';
       sheet.getCell(tr, 7).value = totalAmount;
 
       for (let col = 1; col <= 7; col++) {
@@ -412,257 +421,361 @@ const exportToExcel = async () => {
     else if (downloadType === 'XLSX') { exportToExcel(); setShowAdModal(false); setDownloadType(null); }
   };
 
-  const addItem = () => setItems([...items, { id: Date.now(), name: '', spec: '', count: '', price: '' }]);
+  const addItem = () => {
+    const id = Date.now();
+    setItems([...items, { id, name: '', spec: '', count: 1, price: '' }]);
+    setTimeout(() => document.getElementById(`name-${id}`)?.focus(), 50);
+  };
+
+  // 단계 이동: 각 단계에서 꼭 필요한 것만 확인하고 넘어간다
+  const goNext = () => {
+    if (step === 2 && !info.provider.trim()) {
+      alert('사업자명을 적어 주세요.\n견적서의 공급자 이름으로 들어가요.');
+      document.getElementById('f-provider')?.focus();
+      return;
+    }
+    if (step === 3 && !validateBeforePreview()) return;
+    setStep(s => Math.min(4, s + 1));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  const openPreview = () => {
+    trackEvent('click_preview', '미리보기 버튼 클릭');
+    if (!validateBeforePreview()) { setStep(3); return; }
+    saveProfile(true);          // 사업자 정보·도장은 조용히 기억해 둔다
+    localStorage.setItem('smartbill.guideSeen', '1');   // 한 번 만들어 봤으면 다음엔 가이드 접기
+    setShowPreview(true);
+  };
   const updateItem = (id: number, key: keyof BillItem, value: any) => setItems(items.map(i => i.id === id ? { ...i, [key]: value } : i));
 
   return (
     <div className="min-h-screen bg-gray-100 font-sans text-slate-900 pb-10">
-      <div className="no-print">
-        {/* 최상단 홍보 문구 라인 */}
-        <div className="bg-orange-500 text-white py-4 px-6 shadow-md text-center">
-          <p className="text-xs md:text-sm font-medium opacity-90 mb-1">
-            복잡한 견적서 작업은 이제 그만!
-          </p>
-          <h2 className="text-lg md:text-2xl font-extrabold tracking-tight">
-            누구나 <span className="text-yellow-300">10초면 뚝딱</span> 만드는 무료 견적서 📝
-          </h2>
-        </div>
-        <header className="bg-white border-b px-4 py-3 sticky top-0 z-20 flex justify-between items-center shadow-sm">
-          <img src="/images/smart_bill_logo.jpg" alt="로고" className="h-14 w-14" />
-          <div className="flex flex-col items-center gap-2">
-          <button 
-            id="btn_preview_open" 
-            onClick={() => {
-              trackEvent('click_preview', '미리보기 버튼 클릭');
-              if (!validateBeforePreview()) return;
-              saveProfile(true);          // 사업자 정보·도장은 조용히 기억해 둔다
-              localStorage.setItem('smartbill.guideSeen', '1');   // 한 번 만들어 봤으면 다음엔 가이드 접기
-              setShowPreview(true);
-            }}
-            className="bg-[#FF7E36] text-white px-8 py-4 rounded-2xl font-extrabold text-lg shadow-[0_4px_14px_0_rgba(255,126,54,0.39)] hover:scale-105 transition-transform animate-bounce-subtle"
-          >
-            🚀 10초 만에 결과물 확인하기
-          </button>
-          <span className="text-[11px] text-gray-500 font-medium">가입 없이 무료로 바로 다운로드</span>
-        </div>
+      <div className="no-print pb-28">
+        {/* 상단: 로고 + 제목 + 모두 지우기 */}
+        <header className="bg-white border-b px-4 py-3 sticky top-0 z-20 shadow-sm">
+          <div className="max-w-xl mx-auto flex items-center gap-3">
+            <img src="/images/smart_bill_logo.jpg" alt="로고" className="h-12 w-12 rounded-xl" />
+            <div className="flex-1 min-w-0">
+              <h1 className="text-lg font-extrabold text-slate-900 leading-tight">무료 견적서 만들기</h1>
+              <p className="text-[13px] text-slate-500">가입 없이 · 10초면 완성 · 내용은 내 폰에만 저장</p>
+            </div>
+            <button onClick={resetAll} className="text-[13px] font-bold text-slate-400 hover:text-red-500 px-2 py-2">모두 지우기</button>
+          </div>
+          {/* 진행 단계 */}
+          <ol className="max-w-xl mx-auto mt-3 grid grid-cols-4 gap-1">
+            {STEP_TITLES.map((t, i) => {
+              const n = i + 1;
+              const state = n === step ? 'current' : n < step ? 'done' : 'todo';
+              return (
+                <li key={t}>
+                  <button
+                    onClick={() => { if (n < step) setStep(n); }}
+                    className={`w-full flex flex-col items-center gap-1 py-1 rounded-xl ${state === 'current' ? 'bg-orange-50' : ''}`}
+                    aria-current={state === 'current' ? 'step' : undefined}
+                  >
+                    <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-black ${
+                      state === 'current' ? 'bg-[#FF7E36] text-white' : state === 'done' ? 'bg-green-500 text-white' : 'bg-slate-200 text-slate-500'}`}>
+                      {state === 'done' ? '✓' : n}
+                    </span>
+                    <span className={`text-[12px] font-bold ${state === 'current' ? 'text-slate-900' : 'text-slate-400'}`}>{t}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
         </header>
 
-        <main className="max-w-7xl mx-auto p-4 flex flex-col lg:flex-row gap-6">
-          <div className="flex-1 space-y-6">
-            {/* 사용 안내: 3단계 */}
-            <section className="bg-white rounded-2xl border border-zinc-200 shadow-sm">
-              <button onClick={() => { setShowGuide(v => !v); localStorage.setItem('smartbill.guideSeen', '1'); }}
-                      className="w-full flex justify-between items-center px-5 py-3 text-left">
-                <span className="text-sm font-black text-slate-700">📖 처음이세요? 3단계면 끝나요</span>
-                <span className="text-slate-400 text-xs">{showGuide ? '접기 ▲' : '펼치기 ▼'}</span>
-              </button>
+        <main className="max-w-xl mx-auto p-4 space-y-5">
+
+          {/* ───────── 1단계: 받는 분 ───────── */}
+          {step === 1 && (
+            <section className="space-y-5">
+              <div>
+                <h2 className="text-2xl font-extrabold text-slate-900">누구에게 보내는 견적서인가요?</h2>
+                <p className="text-slate-500 mt-1">모르면 비워 두고 <b>다음</b>을 눌러도 돼요.</p>
+              </div>
+              <label className="block">
+                <span className="big-label">받는 분 (회사명 또는 이름)</span>
+                <input id="f-customer" type="text" placeholder="예: 홍길동 / 한빛아파트 관리사무소" value={info.customer} className="input-style"
+                       onChange={e => setInfo({ ...info, customer: e.target.value })} />
+              </label>
+              <label className="block">
+                <span className="big-label">견적 날짜</span>
+                <input type="date" value={info.date} className="input-style" onChange={e => setInfo({ ...info, date: e.target.value })} />
+              </label>
               {showGuide && (
-                <ol className="px-5 pb-4 space-y-2 text-sm text-slate-600 leading-relaxed">
-                  <li><b className="text-blue-600">①</b> <b>사업자 정보</b>를 적고 도장 사진을 올려요. 한 번 적으면 다음부터 자동으로 채워져요.</li>
-                  <li><b className="text-blue-600">②</b> <b>견적 내역</b>은 칸에 직접 적어도 되고, 문자처럼 쭉 적어서 <b>"자동으로 채우기"</b>를 눌러도 돼요.</li>
-                  <li><b className="text-blue-600">③</b> 위의 주황색 <b>"결과물 확인하기"</b>를 누르면 견적서가 나와요. 이미지로 저장하거나 PDF로 인쇄하세요.</li>
-                  <li className="text-xs text-slate-400 pt-1">입력한 내용은 내 기기에만 저장되고 어디에도 전송되지 않아요.</li>
-                </ol>
+                <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 text-slate-700 leading-relaxed">
+                  <p className="font-extrabold mb-1">📖 처음이세요? 4단계면 끝나요</p>
+                  <p>① 받는 분 → ② 내 사업자 정보와 도장 → ③ 견적 내용 → ④ 확인하고 견적서 받기.</p>
+                  <p className="mt-1">한 번 적은 사업자 정보와 도장은 다음부터 자동으로 채워져요.</p>
+                </div>
               )}
             </section>
+          )}
 
-            <section className="flex justify-center bg-white rounded-2xl p-2 border border-zinc-200 shadow-sm">
-              <iframe src="https://ads-partners.coupang.com/widgets.html?id=963189&template=carousel&trackingCode=AF4084126&width=360&height=180" width="360" height="180" frameBorder="0" scrolling="no" loading="lazy"></iframe>
-            </section>
-
-            <section className="bg-white rounded-2xl p-5 shadow-sm space-y-4 border border-zinc-200">
-            {/* 헤더 부분: 제목과 버튼을 한 줄에 배치 */}
-            <div className="flex justify-between items-center border-b border-gray-50 pb-2">
-              <h2 className="text-sm font-black text-slate-700"><span className="text-blue-600 mr-1">①</span>사업자 정보</h2>
-              <button
-                onClick={resetAll}
-                className="text-[10px] font-bold text-red-500 hover:text-red-700 flex items-center gap-1 transition-colors"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-                모두 지우기
-              </button>
-            </div>
-
-              {/* 저장된 사업자 불러오기 / 저장 */}
-              <div className="flex flex-wrap items-center gap-2">
-                {profiles.length > 0 && (
-                  <select
-                    id="profile-select"
-                    className="input-style !w-auto flex-1 min-w-[160px] font-bold"
-                    value=""
-                    onChange={e => { if (e.target.value) loadProfile(e.target.value); e.target.value = ''; }}
-                  >
-                    <option value="">📂 저장된 사업자 불러오기 ({profiles.length})</option>
-                    {profiles.map(p => <option key={p.provider} value={p.provider}>{p.provider}{p.stamp ? ' (도장 있음)' : ''}</option>)}
-                  </select>
-                )}
-                <button id="btn-save-profile" onClick={() => saveProfile(false)}
-                        className="text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 px-3 py-2 rounded-xl hover:bg-blue-100 transition">
-                  💾 이 사업자 정보 저장
-                </button>
-                {info.provider && profiles.some(p => p.provider === info.provider.trim()) && (
-                  <button onClick={() => deleteProfile(info.provider.trim())} className="text-xs text-gray-400 underline px-1">저장 삭제</button>
-                )}
+          {/* ───────── 2단계: 내 사업자 정보 + 도장 ───────── */}
+          {step === 2 && (
+            <section className="space-y-5">
+              <div>
+                <h2 className="text-2xl font-extrabold text-slate-900">내 사업자 정보</h2>
+                <p className="text-slate-500 mt-1">견적서에 '공급자'로 찍히는 내용이에요. <b>사업자명</b>만 꼭 필요해요.</p>
               </div>
-              {profileMsg && <p id="profile-msg" className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">{profileMsg}</p>}
 
-              {/* grid에 gap-3을 유지하면서 각 항목이 동일한 비율을 갖도록 설정 */}
-              <div className="grid grid-cols-2 md:grid-cols-2 gap-4 w-full">
-                <input id="f-provider" type="text" placeholder="사업자명 (예: 일광페인팅)" value={info.provider} className="input-style" onChange={e => setInfo({...info, provider: e.target.value})} />
-                <input type="text" placeholder="사업자번호" value={info.bizNumber} className="input-style" onChange={e => handleBizNumberChange(e.target.value)} />
-                
-                {/* 날짜 입력칸: min-w-0을 주어 부모 그리드를 벗어나지 않게 고정 */}
-                <div className="min-w-0 w-full flex items-center">
-                  <input 
-                    type="date" 
-                    className="input-style w-full !px-1 text-[13px] md:text-sm appearance-none" 
-                    style={{ minWidth: '0', display: 'block', boxSizing: 'border-box' }}
-                    value={info.date} 
-                    onChange={e => setInfo({...info, date: e.target.value})} 
-                  />
-                </div>
-                
-                <input type="text" placeholder="받는분(귀하)" value={info.customer} className="input-style min-w-0 w-full" onChange={e => setInfo({...info, customer: e.target.value})} />
-                
-                <input type="text" placeholder="업태 (ex,페인트)" value={info.category} className="input-style" onChange={e => setInfo({...info, category: e.target.value})} />
-                <input type="text" placeholder="종목 (ex,제조업)" value={info.sector} className="input-style" onChange={e => setInfo({...info, sector: e.target.value})} />
-                
-                <input type="text" placeholder="주소" value={info.address} className="input-style col-span-2" onChange={e => setInfo({...info, address: e.target.value})} />
-                <textarea placeholder="비고 및 특약사항" value={info.remark} className="input-style col-span-2 h-20" onChange={e => setInfo({...info, remark: e.target.value})} />
-              </div>
-            </section>
-
-            {/* 도장 업로드 버튼 위치: 사업자 정보 입력칸들 바로 아래 */}
-            <div className="pt-2">
-              <input 
-                type="file" 
-                accept="image/*" 
-                ref={fileInputRef} 
-                hidden 
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleStampFile(file);
-                  e.target.value = ''; // 같은 파일 다시 올려도 동작하게
-                }}
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full text-xs bg-gray-50 border border-dashed py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition"
-              >
-                {stampBusy ? "⏳ 도장 배경 지우는 중..." : stampImage ? "✅ 도장 등록됨 (바꾸려면 여기를 누르세요)" : "📸 도장 사진 올리기 — 종이에 찍어 폰으로 찍은 사진도 돼요 (배경 자동 제거)"}
-              </button>
-              {stampImage && !stampBusy && (
-                <div className="mt-2 flex items-center gap-3 bg-white border border-zinc-200 rounded-xl p-2">
-                  {/* 체크무늬 배경: 투명하게 지워졌는지 눈으로 확인 */}
-                  <div className="w-14 h-14 rounded-lg shrink-0 flex items-center justify-center"
-                       style={{ backgroundImage: 'conic-gradient(#e5e7eb 25%, #fff 0 50%, #e5e7eb 0 75%, #fff 0)', backgroundSize: '12px 12px' }}>
-                    <img src={stampImage} alt="도장 미리보기" className="max-w-full max-h-full object-contain" />
+              {profiles.length > 0 && (
+                <div className="space-y-2">
+                  <span className="big-label">📂 저장된 사업자 — 누르면 바로 채워져요</span>
+                  <div className="flex flex-wrap gap-2">
+                    {profiles.map(p => {
+                      const active = p.provider === info.provider.trim();
+                      return (
+                        <button key={p.provider} onClick={() => loadProfile(p.provider)}
+                                className={`profile-chip px-4 py-3 rounded-2xl text-base font-bold border-2 transition ${
+                                  active ? 'bg-green-50 border-green-500 text-green-800' : 'bg-white border-slate-200 text-slate-700 hover:border-slate-400'}`}>
+                          {active ? '✓ ' : ''}{p.provider}{p.stamp ? ' 🔏' : ''}
+                        </button>
+                      );
+                    })}
                   </div>
-                  <p className="flex-1 text-[11px] text-gray-500">
-                    {!stampOriginal ? '저장해 둔 도장을 쓰고 있어요.' : stampImage !== stampOriginal ? '배경을 투명하게 지웠어요.' : '원본 이미지를 사용 중이에요.'}
-                  </p>
-                  {stampOriginal && (
-                    <button
-                      onClick={() => stampImage !== stampOriginal ? setStampImage(stampOriginal) : cutoutStamp(stampOriginal)}
-                      className="text-[11px] font-bold text-blue-600 shrink-0 px-2"
-                    >
-                      {stampImage !== stampOriginal ? '원본으로 되돌리기' : '배경 지우기'}
-                    </button>
-                  )}
                 </div>
               )}
-            </div>
-            
-            {/* 텍스트로 한 번에 입력 */}
-            <section className="bg-white rounded-2xl p-5 shadow-sm space-y-3 border border-zinc-200">
-              <h2 className="text-sm font-black text-slate-700"><span className="text-blue-600 mr-1">②</span>견적 내용 적기 <span className="text-xs font-medium text-slate-400 ml-1">글로 적어 한 번에 넣기</span></h2>
-              <p className="text-xs text-slate-500 leading-relaxed">
-                문자 보내듯 한 줄에 하나씩 적고 <b>자동으로 채우기</b>를 누르세요.
-                <b className="text-slate-700"> 품명:단가×수량</b> 순서면 돼요. 공급자·받는분도 같이 적을 수 있어요.
-              </p>
-              <textarea
-                id="quick-text"
-                value={quickText}
-                onChange={e => setQuickText(e.target.value)}
-                placeholder={QUICK_EXAMPLE}
-                className="input-style h-40 font-mono text-[13px] leading-relaxed"
-              />
-              <div className="grid grid-cols-[1fr_auto] gap-2">
-                <button id="btn-quick-apply" onClick={applyQuickText}
-                        className="bg-blue-600 text-white py-3 rounded-xl font-extrabold text-sm shadow hover:bg-blue-700 transition">
-                  ✨ 자동으로 채우기
-                </button>
-                <button onClick={() => setQuickText(QUICK_EXAMPLE)} className="text-xs text-slate-500 px-3 border border-zinc-200 rounded-xl">예시 넣기</button>
-              </div>
-              {quickMsg && <p id="quick-msg" className="text-xs text-slate-700 bg-blue-50 rounded-lg px-3 py-2 whitespace-pre-line">{quickMsg}</p>}
-            </section>
+              {profileMsg && <p id="profile-msg" className="text-[15px] text-green-800 bg-green-50 rounded-xl px-4 py-3">{profileMsg}</p>}
 
-            <section id="items-section" className="space-y-3">
-              <div className="flex justify-between items-center px-2">
-                <h2 className="text-sm font-black text-slate-700"><span className="text-blue-600 mr-1">②</span>견적 내역 확인·수정 <span className="text-xs font-medium text-slate-400 ml-1">수량·단가는 꼭 적어 주세요</span></h2>
-                <button onClick={addItem} className="text-blue-600 font-bold text-sm">+ 항목 추가</button>
+              <label className="block">
+                <span className="big-label">사업자명 <em className="text-red-500 not-italic">*필수</em></span>
+                <input id="f-provider" type="text" placeholder="예: 일광페인팅" value={info.provider} className="input-style" onChange={e => setInfo({ ...info, provider: e.target.value })} />
+              </label>
+              <label className="block">
+                <span className="big-label">사업자번호 <span className="text-slate-400 font-medium">(선택)</span></span>
+                <input type="text" inputMode="numeric" placeholder="숫자만 10자리" value={info.bizNumber} className="input-style" onChange={e => handleBizNumberChange(e.target.value)} />
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="big-label">업태 <span className="text-slate-400 font-medium">(선택)</span></span>
+                  <input type="text" placeholder="예: 건설업" value={info.category} className="input-style" onChange={e => setInfo({ ...info, category: e.target.value })} />
+                </label>
+                <label className="block">
+                  <span className="big-label">종목 <span className="text-slate-400 font-medium">(선택)</span></span>
+                  <input type="text" placeholder="예: 도장" value={info.sector} className="input-style" onChange={e => setInfo({ ...info, sector: e.target.value })} />
+                </label>
               </div>
-              {/* 부가세 계산 방식 — 둘 중 하나만 선택 */}
-              <div className="grid grid-cols-2 gap-2">
-                {([['none', '부가세 없이 계산'], ['include', '부가세 포함 계산 (10%)']] as const).map(([mode, label]) => (
-                  <label
-                    key={mode}
-                    className={`flex items-center gap-2 rounded-xl p-3 text-xs font-bold cursor-pointer border transition ${
-                      vatMode === mode ? 'bg-blue-50 border-blue-400 text-blue-700' : 'bg-white border-zinc-200 text-gray-500'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={vatMode === mode}
-                      onChange={() => { setVatMode(mode); trackEvent('click_vat_mode', label); }}
-                      className="w-4 h-4 accent-blue-600"
-                    />
-                    {label}
-                  </label>
+              <label className="block">
+                <span className="big-label">주소 <span className="text-slate-400 font-medium">(선택)</span></span>
+                <input type="text" placeholder="예: 서울 강남구 학동로 28" value={info.address} className="input-style" onChange={e => setInfo({ ...info, address: e.target.value })} />
+              </label>
+
+              {/* 도장 */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+                <span className="big-label">도장 <span className="text-slate-400 font-medium">(선택)</span></span>
+                <input type="file" accept="image/*" ref={fileInputRef} hidden
+                       onChange={(e) => { const f = e.target.files?.[0]; if (f) handleStampFile(f); e.target.value = ''; }} />
+                {stampImage && !stampBusy ? (
+                  <div className="flex items-center gap-4">
+                    <div className="w-20 h-20 rounded-xl shrink-0 flex items-center justify-center border border-slate-200"
+                         style={{ backgroundImage: 'conic-gradient(#e5e7eb 25%, #fff 0 50%, #e5e7eb 0 75%, #fff 0)', backgroundSize: '12px 12px' }}>
+                      <img src={stampImage} alt="도장 미리보기" className="max-w-full max-h-full object-contain" />
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <p className="text-[15px] text-slate-700 font-bold">
+                        {!stampOriginal ? '저장해 둔 도장을 쓰고 있어요.' : stampImage !== stampOriginal ? '배경을 투명하게 지웠어요.' : '원본 그대로 쓰고 있어요.'}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={() => fileInputRef.current?.click()} className="text-[15px] font-bold text-blue-700 bg-blue-50 px-3 py-2 rounded-xl">다른 사진으로</button>
+                        {stampOriginal && (
+                          <button onClick={() => stampImage !== stampOriginal ? setStampImage(stampOriginal) : cutoutStamp(stampOriginal)}
+                                  className="text-[15px] font-bold text-slate-600 bg-slate-100 px-3 py-2 rounded-xl">
+                            {stampImage !== stampOriginal ? '원본으로' : '배경 지우기'}
+                          </button>
+                        )}
+                        <button onClick={() => { setStampImage(null); setStampOriginal(null); }} className="text-[15px] text-slate-400 px-2 py-2">빼기</button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => fileInputRef.current?.click()} disabled={stampBusy}
+                          className="w-full bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl py-5 text-slate-600 font-bold text-base hover:bg-slate-100 transition disabled:opacity-60">
+                    {stampBusy ? '⏳ 도장 배경을 지우는 중이에요…' : <>📸 도장 사진 올리기<br /><span className="text-[13px] font-medium text-slate-400">종이에 찍어 폰으로 찍은 사진도 돼요. 배경은 자동으로 지워져요.</span></>}
+                  </button>
+                )}
+              </div>
+
+              <button id="btn-save-profile" onClick={() => saveProfile(false)}
+                      className="w-full text-base font-bold bg-blue-50 text-blue-700 border border-blue-200 py-3 rounded-2xl hover:bg-blue-100 transition">
+                💾 이 정보와 도장을 이 폰에 저장해 두기
+              </button>
+              {info.provider && profiles.some(p => p.provider === info.provider.trim()) && (
+                <button onClick={() => deleteProfile(info.provider.trim())} className="w-full text-[14px] text-slate-400 underline py-1">'{info.provider.trim()}' 저장 정보 지우기</button>
+              )}
+
+              <div className="flex justify-center bg-white rounded-2xl p-2 border border-zinc-200">
+                <iframe src="https://ads-partners.coupang.com/widgets.html?id=963189&template=carousel&trackingCode=AF4084126&width=360&height=180" width="360" height="180" frameBorder="0" scrolling="no" loading="lazy"></iframe>
+              </div>
+            </section>
+          )}
+
+          {/* ───────── 3단계: 견적 내용 ───────── */}
+          {step === 3 && (
+            <section className="space-y-5">
+              <div>
+                <h2 className="text-2xl font-extrabold text-slate-900">무엇을 얼마에 하나요?</h2>
+                <p className="text-slate-500 mt-1">하나씩 적거나, 문자처럼 쭉 적어서 한 번에 넣을 수 있어요.</p>
+              </div>
+
+              {/* 글로 한 번에 넣기 */}
+              <div className="bg-white rounded-2xl border-2 border-blue-200 overflow-hidden">
+                <button onClick={() => setShowQuick(v => !v)} className="w-full flex items-center justify-between px-4 py-4 text-left">
+                  <span className="text-base font-extrabold text-blue-800">✍️ 문자처럼 쭉 적어서 한 번에 넣기</span>
+                  <span className="text-slate-400 text-sm">{showQuick ? '접기 ▲' : '열기 ▼'}</span>
+                </button>
+                {showQuick && (
+                  <div className="px-4 pb-4 space-y-3">
+                    <p className="text-[15px] text-slate-600 leading-relaxed">한 줄에 하나씩 <b className="text-slate-900">품명:단가×수량</b> 순서로 적으세요. 받는 분, 공급자도 같이 적을 수 있어요.</p>
+                    <textarea id="quick-text" value={quickText} onChange={e => setQuickText(e.target.value)} placeholder={QUICK_EXAMPLE}
+                              className="input-style h-44 font-mono !text-[15px] leading-relaxed" />
+                    <div className="grid grid-cols-[1fr_auto] gap-2">
+                      <button id="btn-quick-apply" onClick={applyQuickText}
+                              className="bg-blue-600 text-white py-4 rounded-2xl font-extrabold text-base shadow hover:bg-blue-700 transition">✨ 자동으로 채우기</button>
+                      <button onClick={() => setQuickText(QUICK_EXAMPLE)} className="text-[14px] text-slate-500 px-3 border border-slate-200 rounded-2xl">예시 보기</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* 결과 안내는 입력창을 접어도 보이도록 카드 바깥에 */}
+              {quickMsg && <p id="quick-msg" className="text-[15px] text-slate-800 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 whitespace-pre-line leading-relaxed">{quickMsg}</p>}
+
+              {/* 항목 카드 */}
+              <div id="items-section" className="space-y-3">
+                {items.map((item, idx) => {
+                  const named = !!item.name.trim();
+                  const needCount = named && !(Number(item.count) > 0);
+                  const needPrice = named && !(Number(item.price) > 0);
+                  const line = (Number(item.count) || 0) * (Number(item.price) || 0);
+                  const warn = 'border-red-400 bg-red-50';
+                  return (
+                    <div key={item.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <span className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 text-sm font-black flex items-center justify-center shrink-0">{idx + 1}</span>
+                        <input id={`name-${item.id}`} type="text" placeholder="품명 (예: 하도 페인트)" value={item.name}
+                               className="input-style !py-3 flex-1 font-bold" onChange={e => updateItem(item.id, 'name', e.target.value)} />
+                        {items.length > 1 && (
+                          <button onClick={() => setItems(items.filter(i => i.id !== item.id))} className="w-10 h-10 rounded-full text-slate-300 hover:text-red-500 hover:bg-red-50 text-xl" aria-label="항목 삭제">✕</button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-[1fr_1fr] gap-3">
+                        <label className="block">
+                          <span className="big-label">수량 <em className="text-red-500 not-italic">*</em></span>
+                          <div className="relative">
+                            <input id={`count-${item.id}`} type="text" inputMode="numeric" placeholder="1" value={item.count}
+                                   className={`input-style !py-3 !pr-10 text-right ${needCount ? warn : ''}`}
+                                   onChange={e => updateItem(item.id, 'count', e.target.value.replace(/[^\d]/g, ''))} />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[15px]">개</span>
+                          </div>
+                        </label>
+                        <label className="block">
+                          <span className="big-label">단가 <em className="text-red-500 not-italic">*</em></span>
+                          <div className="relative">
+                            <input id={`price-${item.id}`} type="text" inputMode="numeric" placeholder="0" value={item.price === '' ? '' : Number(item.price).toLocaleString()}
+                                   className={`input-style !py-3 !pr-10 text-right ${needPrice ? warn : ''}`}
+                                   onChange={e => updateItem(item.id, 'price', e.target.value.replace(/[^\d]/g, ''))} />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-[15px]">원</span>
+                          </div>
+                        </label>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <input type="text" placeholder="규격 (선택, 예: 1말)" value={item.spec}
+                               className="input-style !py-2 !text-[15px] flex-1" onChange={e => updateItem(item.id, 'spec', e.target.value)} />
+                        <span className="text-base font-extrabold text-slate-800 whitespace-nowrap">= {line.toLocaleString()}원</span>
+                      </div>
+                      {(needCount || needPrice) && <p className="text-[14px] text-red-600 font-bold">{needCount ? '수량' : '단가'}을(를) 적어야 금액에 들어가요.</p>}
+                    </div>
+                  );
+                })}
+                <button onClick={addItem} className="w-full bg-white border-2 border-dashed border-blue-300 text-blue-700 rounded-2xl py-4 font-extrabold text-base hover:bg-blue-50 transition">
+                  ＋ 항목 하나 더 추가
+                </button>
+              </div>
+
+              <div className="bg-slate-900 text-white rounded-2xl px-5 py-4 flex items-center justify-between">
+                <span className="text-base font-bold">지금까지 합계</span>
+                <span className="text-2xl font-black">{supplyAmount.toLocaleString()}원</span>
+              </div>
+            </section>
+          )}
+
+          {/* ───────── 4단계: 확인 ───────── */}
+          {step === 4 && (
+            <section className="space-y-5">
+              <div>
+                <h2 className="text-2xl font-extrabold text-slate-900">마지막으로 확인해 주세요</h2>
+                <p className="text-slate-500 mt-1">부가세를 고르고 <b>견적서 만들기</b>를 누르면 끝이에요.</p>
+              </div>
+
+              <div className="space-y-2">
+                <span className="big-label">부가세</span>
+                <div className="grid grid-cols-2 gap-3">
+                  {([['none', '부가세 없이', '적은 금액 그대로'], ['include', '부가세 포함', '10%를 더해요']] as const).map(([mode, label, sub]) => (
+                    <label key={mode}
+                           className={`flex flex-col items-start gap-1 rounded-2xl p-4 cursor-pointer border-2 transition ${
+                             vatMode === mode ? 'bg-blue-50 border-blue-500' : 'bg-white border-slate-200'}`}>
+                      <span className="flex items-center gap-2 text-base font-extrabold text-slate-900">
+                        <input type="checkbox" checked={vatMode === mode} onChange={() => { setVatMode(mode); trackEvent('click_vat_mode', label); }} className="w-5 h-5 accent-blue-600" />
+                        {label}
+                      </span>
+                      <span className="text-[14px] text-slate-500 pl-7">{sub}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100">
+                <div className="px-4 py-3 text-[15px] text-slate-500 flex justify-between"><span>받는 분</span><b className="text-slate-900">{info.customer || '(비움)'}</b></div>
+                <div className="px-4 py-3 text-[15px] text-slate-500 flex justify-between"><span>공급자</span><b className="text-slate-900">{info.provider}{stampImage ? ' 🔏' : ''}</b></div>
+                {items.filter(i => i.name.trim()).map(i => (
+                  <div key={i.id} className="px-4 py-3 text-[15px] flex justify-between gap-3">
+                    <span className="text-slate-700 truncate">{i.name}{i.spec ? <span className="text-slate-400"> ({i.spec})</span> : ''} × {i.count}</span>
+                    <b className="text-slate-900 whitespace-nowrap">{((Number(i.count) || 0) * (Number(i.price) || 0)).toLocaleString()}원</b>
+                  </div>
                 ))}
-              </div>
-              {items.map((item, idx) => {
-                const named = !!item.name.trim();
-                const needCount = named && !(Number(item.count) > 0);
-                const needPrice = named && !(Number(item.price) > 0);
-                const warn = 'border-red-400 bg-red-50 placeholder-red-400';
-                return (
-                <div key={item.id} className="bg-white rounded-xl p-4 shadow-sm border border-zinc-200 flex flex-col gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-400 w-5">{idx + 1}.</span>
-                    <input id={`name-${item.id}`} type="text" placeholder="품명 (예: 하도)" value={item.name} className="flex-1 border-b text-base outline-none pb-1 font-medium" onChange={e => updateItem(item.id, 'name', e.target.value)} />
-                    {items.length > 1 && <button onClick={() => setItems(items.filter(i => i.id !== item.id))} className="text-slate-300 hover:text-red-500 text-lg px-1" aria-label="항목 삭제">✕</button>}
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <input type="text" placeholder="규격 (예: 1말)" value={item.spec} className="border-b text-sm outline-none pb-1" onChange={e => updateItem(item.id, 'spec', e.target.value)} />
-                    <input id={`count-${item.id}`} type="number" min={1} placeholder="수량 *필수" value={item.count} className={`border-b text-sm outline-none pb-1 ${needCount ? warn : ''}`} onChange={e => updateItem(item.id, 'count', e.target.value)} />
-                    <input id={`price-${item.id}`} type="number" min={0} placeholder="단가 *필수" value={item.price} className={`border-b text-sm outline-none pb-1 ${needPrice ? warn : ''}`} onChange={e => updateItem(item.id, 'price', e.target.value)} />
-                  </div>
-                  {(needCount || needPrice) && <p className="text-[11px] text-red-500">{needCount ? '수량' : '단가'}을(를) 적어야 금액에 들어가요.</p>}
-                </div>
-                );
-              })}
-              {/* 실시간 합계 */}
-              <div className="bg-white rounded-xl p-4 border border-zinc-200 text-xs space-y-1">
                 {withVat && (
                   <>
-                    <div className="flex justify-between text-gray-500"><span>공급가액</span><span>₩{supplyAmount.toLocaleString()}</span></div>
-                    <div className="flex justify-between text-gray-500"><span>부가세 (10%)</span><span>₩{vatAmount.toLocaleString()}</span></div>
+                    <div className="px-4 py-3 text-[15px] text-slate-500 flex justify-between"><span>공급가액</span><span>{supplyAmount.toLocaleString()}원</span></div>
+                    <div className="px-4 py-3 text-[15px] text-slate-500 flex justify-between"><span>부가세 (10%)</span><span>{vatAmount.toLocaleString()}원</span></div>
                   </>
                 )}
-                <div className="flex justify-between font-black text-sm">
-                  <span>합계금액{withVat ? ' (VAT 포함)' : ''}</span><span className="text-blue-700">₩{totalAmount.toLocaleString()}</span>
+                <div className="px-4 py-4 flex justify-between items-center bg-slate-50 rounded-b-2xl">
+                  <span className="text-base font-bold text-slate-700">합계금액{withVat ? ' (부가세 포함)' : ''}</span>
+                  <span id="final-total" className="text-2xl font-black text-blue-700">{totalAmount.toLocaleString()}원</span>
                 </div>
               </div>
-            </section>
 
-            <section className="flex justify-center bg-white rounded-2xl p-2 border border-zinc-200 shadow-sm">
-              <iframe src="https://ads-partners.coupang.com/widgets.html?id=964078&template=carousel&trackingCode=AF4084126&width=360&height=180" width="360" height="180" frameBorder="0" scrolling="no" loading="lazy"></iframe>
+              <label className="block">
+                <span className="big-label">비고·특약사항 <span className="text-slate-400 font-medium">(선택)</span></span>
+                <textarea placeholder="예: 계약금 30% 선입금, 자재 변경 시 별도 협의" value={info.remark} className="input-style h-24 !text-base" onChange={e => setInfo({ ...info, remark: e.target.value })} />
+              </label>
+
+              <div className="flex justify-center bg-white rounded-2xl p-2 border border-zinc-200">
+                <iframe src="https://ads-partners.coupang.com/widgets.html?id=964078&template=carousel&trackingCode=AF4084126&width=360&height=180" width="360" height="180" frameBorder="0" scrolling="no" loading="lazy"></iframe>
+              </div>
             </section>
-          </div>
+          )}
         </main>
+
+        {/* 하단 고정: 이전 / 다음 (마지막은 견적서 만들기) */}
+        <div className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-t border-slate-200 p-3">
+          <div className="max-w-xl mx-auto grid grid-cols-[1fr_2fr] gap-3">
+            <button onClick={() => setStep(s => Math.max(1, s - 1))} disabled={step === 1}
+                    className="py-4 rounded-2xl font-bold text-base bg-slate-100 text-slate-600 disabled:opacity-40">← 이전</button>
+            {step < 4 ? (
+              <button id="btn-next" onClick={goNext}
+                      className="py-4 rounded-2xl font-extrabold text-lg bg-[#FF7E36] text-white shadow-[0_4px_14px_0_rgba(255,126,54,0.39)]">
+                다음 →
+              </button>
+            ) : (
+              <button id="btn_preview_open" onClick={openPreview}
+                      className="py-4 rounded-2xl font-extrabold text-lg bg-[#FF7E36] text-white shadow-[0_4px_14px_0_rgba(255,126,54,0.39)]">
+                🚀 견적서 만들기
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {showPreview && (
@@ -754,7 +867,7 @@ const exportToExcel = async () => {
                             {item ? `${item.name} ` : ''}
                             {item?.spec && <span className="font-normal text-slate-500 text-[10px] ml-1">({item.spec})</span>}
                           </td>
-                          <td className="border border-black">{item?.count || ''}</td>
+                          <td className="border border-black">{item?.name?.trim() ? item.count : ''}</td>
                           <td className="border border-black text-right px-2">{p ? p.toLocaleString() : ''}</td>
                           <td className="border border-black text-right px-2 font-bold">{(c * p) ? (c * p).toLocaleString() : ''}</td>
                         </tr>
@@ -774,7 +887,7 @@ const exportToExcel = async () => {
                     )}
                     <tr className="h-11 bg-slate-50 font-bold text-center">
                       <td className="border border-black" colSpan={2}>합 계</td>
-                      <td className="border border-black">{items.reduce((a, b) => a + (Number(b.count) || 0), 0) || ''}</td>
+                      <td className="border border-black">{items.filter(i => i.name.trim()).reduce((a, b) => a + (Number(b.count) || 0), 0) || ''}</td>
                       <td className="border border-black"></td>
                       <td className="border border-black text-right px-2 text-blue-800">₩{totalAmount.toLocaleString()}</td>
                     </tr>
@@ -815,7 +928,11 @@ const exportToExcel = async () => {
       )}
 
       <style jsx global>{`
-        .input-style { width: 100%; padding: 0.75rem; background-color: #f8fafc; border-radius: 0.75rem; font-size: 1rem; outline: none; border: 1px solid #e2e8f0; }
+        /* 50~60대 기준: 글씨 18px, 손가락으로 누르기 좋은 높이(56px) */
+        .input-style { width: 100%; padding: 0.95rem 1rem; min-height: 56px; background-color: #fff; border-radius: 1rem; font-size: 1.125rem; outline: none; border: 2px solid #e2e8f0; color: #0f172a; }
+        .input-style:focus { border-color: #FF7E36; box-shadow: 0 0 0 4px rgba(255,126,54,0.15); }
+        .input-style::placeholder { color: #94a3b8; }
+        .big-label { display: block; font-size: 1rem; font-weight: 800; color: #334155; margin-bottom: 0.4rem; }
         .preview-container { width: 800px; min-width: 800px; background: white; }
         @media (max-width: 800px) { .preview-container { transform: scale(${(typeof window !== 'undefined' ? window.innerWidth - 32 : 800) / 800}); } }
         @media print { .no-print { display: none !important; } .fixed { position: static !important; } .preview-container { transform: scale(1) !important; width: 100% !important; margin: 0 !important; } }
