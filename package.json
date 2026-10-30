@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:ait": "cross-env AIT=1 NEXT_PUBLIC_AIT=1 next build && ait build",
     "start": "next start",
     "lint": "eslint"
   },
@@ -20,11 +21,13 @@
     "xlsx-js-style": "^1.2.0"
   },
   "devDependencies": {
+    "@apps-in-toss/web-framework": "^3.9.0",
     "@tailwindcss/postcss": "^4",
     "@types/file-saver": "^2.0.7",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",

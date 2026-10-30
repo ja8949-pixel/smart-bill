@@ -8,6 +8,7 @@ import SignaturePad from './SignaturePad';
 import { buildExcelBlob } from './exportExcel';
 import { numToKorean, addDaysLabel, makeQuoteNo, detectInApp, kakaoExternalUrl,
          dataUrlToBlob, shareFile, downloadBlob, jpgToPdfBlob, type InApp } from './billUtils';
+import { IS_TOSS, tossSaveFile } from './toss';
 
 type FileKind = 'jpg' | 'pdf' | 'xlsx';
 const FILE_LABEL: Record<FileKind, string> = { jpg: '이미지', pdf: 'PDF', xlsx: '엑셀' };
@@ -21,7 +22,7 @@ interface FreqItem { name: string; spec: string; price: number; uses: number; la
 
 // 저장 전 광고: 영상 광고를 받으면 여기에 mp4 주소만 넣으면 된다 (없으면 쿠팡 위젯 + 텐핑 이미지로 5초)
 const AD_VIDEO_URL = '';
-const AD_SECONDS = 5;
+const AD_SECONDS = IS_TOSS ? 0 : 5;   // 토스 미니앱은 외부 광고 금지 → 기다림 없이 파일만 만든다
 
 // 이 기기(브라우저)에 기억해 두는 공급자 정보 — 로그인 없이 다음에 바로 불러온다
 interface SavedProfile {
@@ -48,6 +49,7 @@ const COUPANG_IDS = ['963189', '964078'];
 const COUPANG_TRACK = 'AF4084126';
 const COUPANG_W = 330;   // 폰(390px) 안에서 가로 스크롤이 안 생기는 폭
 function CoupangAd({ slot, title, sub }: { slot: number; title: string; sub?: string }) {
+  if (IS_TOSS) return null;   // 토스 심사 정책: 외부 광고 네트워크 금지
   const id = COUPANG_IDS[slot % COUPANG_IDS.length];
   return (
     <aside className="bg-white rounded-2xl border-2 border-amber-200 overflow-hidden">
@@ -238,7 +240,7 @@ export default function BillApp() {
   useEffect(() => {
     const ua = navigator.userAgent;
     setPlatform(/iPhone|iPad|iPod/.test(ua) ? 'ios' : /Android/.test(ua) ? 'android' : 'other');
-    setInApp(detectInApp(ua));
+    setInApp(IS_TOSS ? null : detectInApp(ua));   // 토스 안에서는 '다른 브라우저로 열기' 안내를 하지 않는다 (외부 이동 금지)
     setVoiceOk(!!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition));
     setHistory(readJson<HistoryEntry[]>(HISTORY_KEY, []));
     setFreqItems(readJson<FreqItem[]>(FREQ_KEY, []));
@@ -418,6 +420,17 @@ export default function BillApp() {
     const { mode, kind } = pending;
     const label = FILE_LABEL[kind];
     setShowAdModal(false);
+    if (IS_TOSS) {
+      // 토스 웹뷰: 브라우저 다운로드·공유창이 막혀 있어 토스 브리지로 기기에 저장하고, 보내기는 갤러리에서 하도록 안내
+      const saved = await tossSaveFile(genFile);
+      if (!saved) downloadBlob(genFile, genFile.name);
+      trackEvent('toss_save', kind);
+      setDoneMsg(kind === 'jpg'
+        ? `견적서 이미지가 저장됐어요.\n${mode === 'share' ? '카톡·문자에서 [사진]을 눌러 방금 저장한 견적서를 골라 보내세요.' : '갤러리(사진)에서 확인하세요.'}`
+        : `${label} 파일이 저장됐어요.\n${mode === 'share' ? "카톡·문자에서 [파일]을 눌러 방금 저장한 견적서를 골라 보내세요." : "'파일' 앱의 다운로드에서 확인하세요."}`);
+      setPending(null); setGenFile(null);
+      return;
+    }
     if (mode === 'share') {
       const shared = await shareFile(genFile, `견적서 ${info.customer || ''}`.trim());
       if (shared) {
@@ -630,7 +643,7 @@ export default function BillApp() {
                   <p className="mt-1">한 번 적은 사업자 정보와 도장은 다음부터 자동으로 채워져요.</p>
                 </div>
               )}
-              {!standalone && (
+              {!standalone && !IS_TOSS && (
                 <div id="install-card" className="bg-white rounded-2xl border-2 border-green-200 p-4 space-y-3">
                   <p className="text-base font-extrabold text-slate-800">📱 폰 바탕화면에 넣어 두면 다음엔 한 번에 열려요</p>
                   {platform === 'android' && installEvt ? (
@@ -1159,7 +1172,7 @@ export default function BillApp() {
               <p className="text-[15px] text-slate-600 mt-2 whitespace-pre-line leading-relaxed">{doneMsg}</p>
             </div>
             <CoupangAd slot={1} title="💡 이런 상품도 많이 봐요" sub="오늘 주문하면 내일 도착" />
-            {!standalone && <p className="text-[14px] text-slate-500 text-center">다음엔 더 빨리 쓰려면 첫 화면의 <b>📱 바탕화면에 넣기</b>를 해 두세요.</p>}
+            {!standalone && !IS_TOSS && <p className="text-[14px] text-slate-500 text-center">다음엔 더 빨리 쓰려면 첫 화면의 <b>📱 바탕화면에 넣기</b>를 해 두세요.</p>}
             <button onClick={() => setDoneMsg('')} className="w-full py-4 rounded-2xl bg-blue-600 text-white font-extrabold text-lg">확인</button>
           </div>
         </div>
@@ -1168,16 +1181,26 @@ export default function BillApp() {
       {showAdModal && (
         <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-5 w-full max-w-md text-center space-y-3 shadow-2xl max-h-[92vh] overflow-y-auto">
-            <h3 className="text-xl font-black">잠깐만요, {AD_SECONDS}초만 기다려 주세요</h3>
-            <p className="text-[15px] text-slate-500">{pending?.kind ? FILE_LABEL[pending.kind] : ''} 견적서를 만드는 동안 광고가 나와요. 끝나면 아래 <b>{pending?.mode === 'share' ? '보내기' : '저장하기'}</b> 버튼이 켜져요.</p>
-            {AD_VIDEO_URL ? (
-              <video src={AD_VIDEO_URL} autoPlay muted playsInline className="w-full rounded-2xl bg-black" onEnded={() => setAdLeft(0)} />
+            {IS_TOSS ? (
+              <>
+                <h3 className="text-xl font-black">견적서 파일을 만들고 있어요</h3>
+                <p className="text-[15px] text-slate-500">{pending?.kind ? FILE_LABEL[pending.kind] : ''} 견적서가 준비되면 아래 <b>{pending?.mode === 'share' ? '보내기' : '저장하기'}</b> 버튼이 켜져요.</p>
+                <div className="text-5xl py-4">🧾</div>
+              </>
             ) : (
-              <CoupangAd slot={1} title="🛒 오늘의 추천 상품" sub="로켓배송 — 내일 도착" />
+              <>
+                <h3 className="text-xl font-black">잠깐만요, {AD_SECONDS}초만 기다려 주세요</h3>
+                <p className="text-[15px] text-slate-500">{pending?.kind ? FILE_LABEL[pending.kind] : ''} 견적서를 만드는 동안 광고가 나와요. 끝나면 아래 <b>{pending?.mode === 'share' ? '보내기' : '저장하기'}</b> 버튼이 켜져요.</p>
+                {AD_VIDEO_URL ? (
+                  <video src={AD_VIDEO_URL} autoPlay muted playsInline className="w-full rounded-2xl bg-black" onEnded={() => setAdLeft(0)} />
+                ) : (
+                  <CoupangAd slot={1} title="🛒 오늘의 추천 상품" sub="로켓배송 — 내일 도착" />
+                )}
+                <div onClick={handleAdConfirm} className="cursor-pointer border border-blue-100 rounded-2xl overflow-hidden">
+                  <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" id="btn_ad_medicok" onClick={() => trackEvent('click_ad_image', '메디콕 광고 이미지 클릭')} className="block"><img src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Dis_20251117151015.jpg" className="w-full" /><div className="p-2 bg-blue-50 text-blue-700 font-bold text-[14px]">맞춤형 건강기능식품 메디콕 (누르면 바로 저장돼요)</div></a>
+                </div>
+              </>
             )}
-            <div onClick={handleAdConfirm} className="cursor-pointer border border-blue-100 rounded-2xl overflow-hidden">
-              <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" id="btn_ad_medicok" onClick={() => trackEvent('click_ad_image', '메디콕 광고 이미지 클릭')} className="block"><img src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Dis_20251117151015.jpg" className="w-full" /><div className="p-2 bg-blue-50 text-blue-700 font-bold text-[14px]">맞춤형 건강기능식품 메디콕 (누르면 바로 저장돼요)</div></a>
-            </div>
             <div className="grid grid-cols-[1fr_2fr] gap-3 pt-1">
               <button onClick={() => setShowAdModal(false)} className="py-4 rounded-2xl bg-gray-100 font-bold text-slate-500">취소</button>
               <button id="btn_ad_confirm_save" disabled={adLeft > 0 || !genFile}

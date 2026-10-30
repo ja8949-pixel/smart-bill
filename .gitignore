@@ -20,6 +20,10 @@
 # production
 /build
 
+# 앱인토스 제출용 번들·스크린샷 (npm run build:ait 로 다시 만든다)
+/toss-release/
+*.ait
+
 # misc
 .DS_Store
 *.pem

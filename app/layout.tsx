@@ -26,6 +26,8 @@ export const viewport: Viewport = {
   themeColor: "#FF7E36",
   width: "device-width",
   initialScale: 1,
+  // 토스 미니앱 심사 항목: 손가락 확대·축소(핀치 줌) 끄기
+  ...(process.env.NEXT_PUBLIC_AIT === '1' ? { maximumScale: 1, userScalable: false } : {}),
 };
 
 export default function RootLayout({
