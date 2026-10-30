@@ -2,10 +2,22 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { toJpeg } from 'html-to-image';
-import ExcelJS from 'exceljs';
 import { removeStampBackground, shrinkForStorage } from './stampCutout';
 import { parseQuoteText } from './quickParse';
 import SignaturePad from './SignaturePad';
+import { buildExcelBlob } from './exportExcel';
+import { numToKorean, addDaysLabel, makeQuoteNo, detectInApp, kakaoExternalUrl,
+         dataUrlToBlob, shareFile, downloadBlob, jpgToPdfBlob, type InApp } from './billUtils';
+
+type FileKind = 'jpg' | 'pdf' | 'xlsx';
+const FILE_LABEL: Record<FileKind, string> = { jpg: '이미지', pdf: 'PDF', xlsx: '엑셀' };
+const HISTORY_KEY = 'smartbill.history.v1';     // 지난 견적서
+const FREQ_KEY = 'smartbill.freqItems.v1';      // 자주 쓰는 품목
+interface HistoryEntry {
+  id: string; date: string; customer: string; provider: string; total: number;
+  info: MasterInfo; items: BillItem[]; vatMode: 'none' | 'include'; savedAt: number;
+}
+interface FreqItem { name: string; spec: string; price: number; uses: number; last: number }
 
 // 저장 전 광고: 영상 광고를 받으면 여기에 mp4 주소만 넣으면 된다 (없으면 쿠팡 위젯 + 텐핑 이미지로 5초)
 const AD_VIDEO_URL = '';
@@ -18,6 +30,8 @@ interface SavedProfile {
   address: string;
   category: string;
   sector: string;
+  phone?: string;
+  account?: string;
   stamp: string | null;
   savedAt: number;
 }
@@ -76,9 +90,12 @@ interface MasterInfo {
   address: string;
   category: string; 
   sector: string; 
-  customer: string; 
+  customer: string;
   date: string;
   remark: string;
+  phone: string;      // 공급자 전화
+  account: string;    // 입금 계좌
+  validDays: number;  // 견적 유효기간(일)
 }
 
 // GA 트래킹 공통함수
@@ -99,8 +116,9 @@ export default function BillApp() {
     category: '', 
     sector: '', 
     customer: '',
-    date: new Date().toISOString().split('T')[0], 
-    remark: ''
+    date: new Date().toISOString().split('T')[0],
+    remark: '',
+    phone: '', account: '', validDays: 30,
   });
 
   // 수량은 1로 시작 — 비워 둬서 금액에서 빠지는 일을 애초에 막는다
@@ -126,8 +144,17 @@ export default function BillApp() {
   const [quickMsg, setQuickMsg] = useState('');
   const [showGuide, setShowGuide] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
-  const [showAdModal, setShowAdModal] = useState(false); 
-  const [downloadType, setDownloadType] = useState<'JPG' | 'XLSX' | null>(null);
+  const [showAdModal, setShowAdModal] = useState(false);
+  const [sheet, setSheet] = useState<'share' | 'save' | null>(null);          // 형식 선택창
+  const [pending, setPending] = useState<{ mode: 'share' | 'save'; kind: FileKind } | null>(null);
+  const [genFile, setGenFile] = useState<File | null>(null);                 // 광고 동안 미리 만든 파일
+  const [genError, setGenError] = useState('');
+  const [quoteNo, setQuoteNo] = useState('');
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [freqItems, setFreqItems] = useState<FreqItem[]>([]);
+  const [inApp, setInApp] = useState<InApp>(null);
+  const [voiceOk, setVoiceOk] = useState(false);
+  const [listening, setListening] = useState(false);
 
   const printRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -173,7 +200,8 @@ export default function BillApp() {
     try { return JSON.parse(localStorage.getItem(PROFILES_KEY) || '[]'); } catch { return []; }
   };
   const applyProfile = (p: SavedProfile) => {
-    setInfo(prev => ({ ...prev, provider: p.provider, bizNumber: p.bizNumber, address: p.address, category: p.category, sector: p.sector }));
+    setInfo(prev => ({ ...prev, provider: p.provider, bizNumber: p.bizNumber, address: p.address, category: p.category, sector: p.sector,
+                       phone: p.phone || '', account: p.account || '' }));
     if (p.stamp) { setStampImage(p.stamp); setStampOriginal(null); setStampSource('saved'); }   // 저장본은 이미 배경이 지워진 상태
   };
   useEffect(() => {
@@ -210,6 +238,10 @@ export default function BillApp() {
   useEffect(() => {
     const ua = navigator.userAgent;
     setPlatform(/iPhone|iPad|iPod/.test(ua) ? 'ios' : /Android/.test(ua) ? 'android' : 'other');
+    setInApp(detectInApp(ua));
+    setVoiceOk(!!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition));
+    setHistory(readJson<HistoryEntry[]>(HISTORY_KEY, []));
+    setFreqItems(readJson<FreqItem[]>(FREQ_KEY, []));
     const sa = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
     setStandalone(sa);
     const onPrompt = (e: Event) => { e.preventDefault(); setInstallEvt(e); };
@@ -238,6 +270,10 @@ export default function BillApp() {
     localStorage.removeItem(DRAFT_KEY);
     setDraftMsg('');
     resetAll(true);
+    // 새 견적을 시작해도 내 사업자 정보·도장은 그대로 — 다시 고를 필요 없게
+    const last = localStorage.getItem(LAST_PROFILE_KEY);
+    const p = readProfiles().find(x => x.provider === last);
+    if (p) applyProfile(p);
   };
 
   const saveProfile = async (silent = false) => {
@@ -245,7 +281,8 @@ export default function BillApp() {
     if (!name) { if (!silent) { alert('사업자명을 먼저 적어 주세요.'); document.getElementById('f-provider')?.focus(); } return; }
     try {
       const stamp = stampImage ? await shrinkForStorage(stampImage) : null;
-      const p: SavedProfile = { provider: name, bizNumber: info.bizNumber, address: info.address, category: info.category, sector: info.sector, stamp, savedAt: Date.now() };
+      const p: SavedProfile = { provider: name, bizNumber: info.bizNumber, address: info.address, category: info.category, sector: info.sector,
+                                phone: info.phone, account: info.account, stamp, savedAt: Date.now() };
       const list = [p, ...readProfiles().filter(x => x.provider !== name)].slice(0, 10);
       localStorage.setItem(PROFILES_KEY, JSON.stringify(list));
       localStorage.setItem(LAST_PROFILE_KEY, name);
@@ -337,8 +374,9 @@ export default function BillApp() {
     localStorage.removeItem(DRAFT_KEY);
     setInfo({
       provider: '', bizNumber: '', address: '', category: '', sector: '', customer: '',
-      date: new Date().toISOString().split('T')[0], remark: ''
+      date: new Date().toISOString().split('T')[0], remark: '', phone: '', account: '', validDays: 30,
     });
+    setQuoteNo('');
     setItems([{ id: Date.now(), name: '', spec: '', count: 1, price: '' }]);
     setStampImage(null);
     setStampOriginal(null);
@@ -348,175 +386,122 @@ export default function BillApp() {
   }
 };
 
-  /**
-   * 엑셀 다운로드 (ExcelJS)
-   */
-const exportToExcel = async () => {
+  // ── 파일 만들기 / 보내기 / 저장 ─────────────────────────────
+  //  흐름: [보내기]/[저장] → 형식 선택 → 광고 창(5초) 동안 파일을 미리 만든다 → 버튼이 켜지면 즉시 공유/저장
+  //  (공유창은 '버튼을 누른 직후'에만 열 수 있어서, 파일을 미리 만들어 두는 게 핵심)
+  const fileName = (kind: FileKind) =>
+    `견적서_${(info.customer || '미지정').replace(/[\\/:*?"<>|]/g, '')}_${info.date.replace(/-/g, '')}.${kind}`;
+
+  const buildFile = async (kind: FileKind): Promise<File> => {
+    if (kind === 'xlsx') {
+      const blob = await buildExcelBlob({ info, items, supplyAmount, vatAmount, totalAmount, withVat, stampImage, quoteNo });
+      return new File([blob], fileName('xlsx'), { type: blob.type });
+    }
+    if (!printRef.current) throw new Error('미리보기가 열려 있지 않아요');
+    const dataUrl = await toJpeg(printRef.current, { quality: 0.95, backgroundColor: '#ffffff', pixelRatio: 2 });
+    if (kind === 'jpg') return new File([await dataUrlToBlob(dataUrl)], fileName('jpg'), { type: 'image/jpeg' });
+    return new File([await jpgToPdfBlob(dataUrl)], fileName('pdf'), { type: 'application/pdf' });
+  };
+
+  const startAction = (mode: 'share' | 'save', kind: FileKind) => {
+    trackEvent(`click_${mode}_${kind}`, mode);
+    setSheet(null);
+    setPending({ mode, kind });
+    setGenFile(null); setGenError('');
+    setShowAdModal(true);
+    // 광고 창이 먼저 그려지도록 한 박자 뒤에 만든다 (이미지 변환이 1초쯤 화면을 멈추게 하므로)
+    setTimeout(() => buildFile(kind).then(setGenFile).catch(e => setGenError(String(e?.message || e))), 80);
+  };
+
+  const finishAction = async () => {
+    if (!pending || !genFile) return;
+    const { mode, kind } = pending;
+    const label = FILE_LABEL[kind];
+    setShowAdModal(false);
+    if (mode === 'share') {
+      const shared = await shareFile(genFile, `견적서 ${info.customer || ''}`.trim());
+      if (shared) {
+        trackEvent('share_done', kind);
+        setDoneMsg(`${label} 견적서를 보냈어요.\n(공유창을 닫았다면 다시 '보내기'를 누르세요.)`);
+      } else {
+        downloadBlob(genFile, genFile.name);
+        setDoneMsg(`이 기기는 바로 보내기를 지원하지 않아 ${label}로 저장했어요.\n폰은 갤러리(사진)에서 카톡으로 보내고, 컴퓨터는 다운로드 폴더에서 첨부하세요.`);
+      }
+    } else {
+      downloadBlob(genFile, genFile.name);
+      setDoneMsg(kind === 'jpg'
+        ? '견적서 이미지가 저장됐어요.\n폰은 갤러리(사진), 컴퓨터는 다운로드 폴더에서 확인하세요.'
+        : `${label} 파일이 저장됐어요.\n폰은 '파일' 앱의 다운로드, 컴퓨터는 다운로드 폴더에서 확인하세요.`);
+    }
+    setPending(null); setGenFile(null);
+  };
+  const handleAdConfirm = () => { finishAction(); };
+
+  // ── 지난 견적서 / 자주 쓰는 품목 기억 ─────────────────────────
+  const readJson = <T,>(key: string, fallback: T): T => {
+    try { return JSON.parse(localStorage.getItem(key) || '') as T; } catch { return fallback; }
+  };
+  const ensureQuoteNo = (): string => {
+    const prefix = info.date.replace(/-/g, '');
+    if (quoteNo.startsWith(prefix)) return quoteNo;
+    const hist = readJson<HistoryEntry[]>(HISTORY_KEY, []);
+    const qn = makeQuoteNo(info.date, hist.filter(h => h.date === info.date).length + 1);
+    setQuoteNo(qn);
+    return qn;
+  };
+  const recordHistory = (qn: string) => {
     try {
-      const workbook = new ExcelJS.Workbook();
-      const sheet = workbook.addWorksheet('견적서', {
-        pageSetup: { paperSize: 9, orientation: 'portrait' },
-        views: [{ showGridLines: false }]
-      });
-
-      // 컬럼 너비 설정
-      sheet.columns = [
-        { width: 6 }, { width: 25 }, { width: 12 }, { width: 12 }, 
-        { width: 10 }, { width: 15 }, { width: 18 }
-      ];
-
-      const thinBorder = { top: { style: 'thin' as const }, left: { style: 'thin' as const }, bottom: { style: 'thin' as const}, right: { style: 'thin' as const} };
-      const headerStyle: any = { fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF1F5F9' } }, font: { bold: true, size: 10 }, alignment: { vertical: 'middle', horizontal: 'center' }, border: thinBorder };
-      const cellStyle: any = { font: { size: 10 }, alignment: { vertical: 'middle', horizontal: 'center' }, border: thinBorder };
-
-      // 1. 타이틀
-      sheet.mergeCells('A1:G1');
-      const title = sheet.getCell('A1');
-      title.value = '견 적 서';
-      title.font = { size: 24, bold: true, underline: true };
-      title.alignment = { vertical: 'middle', horizontal: 'center' };
-
-      // 2. 상단 정보
-      sheet.getCell('A3').value = `일자: ${info.date.replace(/-/g, '. ')}`;
-      sheet.mergeCells('A4:C4');
-      const cust = sheet.getCell('A4');
-      cust.value = `${info.customer || "            "} 귀하`;
-      cust.font = { size: 16, bold: true };
-      sheet.getCell('A5').value = "아래와 같이 견적합니다.";
-      sheet.mergeCells('A6:C6');
-      const tot = sheet.getCell('A6');
-      tot.value = `합계금액: ₩${totalAmount.toLocaleString()}${withVat ? ' (VAT 포함)' : ''}`;
-      tot.font = { size: 14, bold: true };
-
-      // 3. 공급자 정보 테이블
-      sheet.mergeCells('D3:D6');
-      const pLab = sheet.getCell('D3');
-      pLab.value = "공\n급\n자";
-      pLab.style = { ...headerStyle, alignment: { wrapText: true, vertical: 'middle', horizontal: 'center' } };
-
-      const formattedBizNumber = info.bizNumber.length === 10 
-      ? info.bizNumber.replace(/(\d{3})(\d{2})(\d{5})/, '$1-$2-$3')
-      : info.bizNumber;
-
-      sheet.getCell('E3').value = "등록번호"; 
-      sheet.getCell('E3').style = headerStyle;
-
-      sheet.mergeCells('F3:G3'); 
-      sheet.getCell('F3').value = formattedBizNumber; // 하이픈이 포함된 번호 삽입
-      sheet.getCell('F3').style = cellStyle;
-      
-      sheet.getCell('E4').value = "상호"; sheet.getCell('E4').style = headerStyle;
-      sheet.getCell('F4').value = info.provider; sheet.getCell('F4').style = cellStyle;
-      sheet.getCell('G4').value = "(인)"; sheet.getCell('G4').style = cellStyle;
-      sheet.getCell('G4').alignment = { horizontal: 'right' };
-      
-      sheet.getCell('E5').value = "주소"; sheet.getCell('E5').style = headerStyle;
-      sheet.mergeCells('F5:G5'); sheet.getCell('F5').value = info.address; sheet.getCell('F5').style = { ...cellStyle, alignment: { horizontal: 'left' } };
-      
-      sheet.getCell('E6').value = "업태"; sheet.getCell('E6').style = headerStyle;
-      sheet.getCell('F6').value = info.category; sheet.getCell('F6').style = cellStyle;
-      sheet.getCell('G6').value = info.sector; sheet.getCell('G6').style = cellStyle;
-
-      if (stampImage) {
-        const imageId = workbook.addImage({ base64: stampImage, extension: 'png' });
-        sheet.addImage(imageId, { tl: { col: 6.2, row: 3.1 }, ext: { width: 45, height: 45 } });
+      const named = items.filter(i => i.name.trim());
+      const entry: HistoryEntry = { id: qn, date: info.date, customer: info.customer, provider: info.provider,
+        total: totalAmount, info, items: named, vatMode, savedAt: Date.now() };
+      const hist = [entry, ...readJson<HistoryEntry[]>(HISTORY_KEY, []).filter(h => h.id !== qn)].slice(0, 30);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
+      setHistory(hist);
+      const freq = readJson<FreqItem[]>(FREQ_KEY, []);
+      for (const it of named) {
+        const k = `${it.name.trim()}|${it.spec.trim()}`;
+        const f = freq.find(x => `${x.name}|${x.spec}` === k);
+        if (f) { f.uses += 1; f.price = Number(it.price) || f.price; f.last = Date.now(); }
+        else freq.push({ name: it.name.trim(), spec: it.spec.trim(), price: Number(it.price) || 0, uses: 1, last: Date.now() });
       }
-
-      // 4. 품목 헤더 (A8 ~ G8)
-      const startRow = 8;
-      const headers = ["NO", "품 명 / 규 격", "", "", "수 량", "단 가", "금 액"];
-      headers.forEach((h, i) => {
-        const cell = sheet.getCell(startRow, i + 1);
-        cell.value = h;
-        cell.style = headerStyle;
-      });
-      sheet.mergeCells(startRow, 2, startRow, 4);
-
-      // 5. 품목 데이터 (테두리 전체 적용) — 품명 없는 빈 줄은 제외
-      const rows = items.filter(i => i.name.trim());
-      rows.forEach((item, i) => {
-        const r = startRow + 1 + i;
-        const count = Number(item.count) || 0;
-        const price = Number(item.price) || 0;
-
-        sheet.getCell(r, 1).value = i + 1;
-        sheet.getCell(r, 2).value = `${item.name} ${item.spec ? `(${item.spec})` : ""}`;
-        sheet.getCell(r, 5).value = count || '';
-        sheet.getCell(r, 6).value = price || '';
-        sheet.getCell(r, 7).value = count * price || '';
-
-        // 모든 셀에 테두리 스타일 적용
-        for (let col = 1; col <= 7; col++) {
-          sheet.getCell(r, col).style = cellStyle;
-        }
-        sheet.mergeCells(r, 2, r, 4);
-        sheet.getCell(r, 2).alignment = { horizontal: 'left', indent: 1 };
-        sheet.getCell(r, 6).numFmt = '#,##0';
-        sheet.getCell(r, 7).numFmt = '#,##0';
-      });
-
-      // 6. 공급가액·부가세 행 (부가세 포함 계산일 때만) + 합계행
-      let tr = startRow + 1 + rows.length;
-      if (withVat) {
-        [["공 급 가 액", supplyAmount], ["부 가 세 (10%)", vatAmount]].forEach(([label, val]) => {
-          sheet.mergeCells(tr, 1, tr, 6);
-          sheet.getCell(tr, 1).value = label;
-          sheet.getCell(tr, 7).value = val;
-          for (let col = 1; col <= 7; col++) sheet.getCell(tr, col).style = cellStyle;
-          sheet.getCell(tr, 7).numFmt = '#,##0';
-          sheet.getCell(tr, 7).alignment = { horizontal: 'right' };
-          tr++;
-        });
-      }
-      sheet.mergeCells(tr, 1, tr, 4);
-      sheet.getCell(tr, 1).value = "합 계 (TOTAL)";
-      sheet.getCell(tr, 5).value = rows.reduce((a, b) => a + (Number(b.count) || 0), 0) || '';
-      sheet.getCell(tr, 7).value = totalAmount;
-
-      for (let col = 1; col <= 7; col++) {
-        sheet.getCell(tr, col).style = headerStyle;
-      }
-      sheet.getCell(tr, 7).font = { bold: true, color: { argb: 'FF1E40AF' } };
-      sheet.getCell(tr, 7).numFmt = '"₩"#,##0';
-
-      // 7. 비고 및 특약사항 박스 추가
-      const remarkRow = tr + 2;
-      sheet.mergeCells(`A${remarkRow}:G${remarkRow + 4}`);
-      const remarkCell = sheet.getCell(`A${remarkRow}`);
-      remarkCell.value = `※ 비고 및 특약사항\n\n${info.remark || "특이사항 없음"}`;
-      remarkCell.style = {
-        font: { size: 10 },
-        alignment: { vertical: 'top', horizontal: 'left', wrapText: true },
-        border: thinBorder
-      };
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `견적서_${info.customer || "미지정"}.xlsx`;
-      document.body.appendChild(a); a.click();
-      window.URL.revokeObjectURL(url); document.body.removeChild(a);
-      setDoneMsg('엑셀 파일이 저장됐어요.\n다운로드 폴더에서 확인하세요.');
-    } catch (err) { alert("엑셀 저장 실패"); }
+      freq.sort((a, b) => b.uses - a.uses || b.last - a.last);
+      localStorage.setItem(FREQ_KEY, JSON.stringify(freq.slice(0, 40)));
+      setFreqItems(freq.slice(0, 40));
+    } catch {}
+  };
+  const loadHistory = (h: HistoryEntry) => {
+    const today = new Date().toISOString().split('T')[0];
+    setInfo(prev => ({ ...prev, ...h.info, date: today }));
+    setItems(h.items.map((it, i) => ({ ...it, id: Date.now() + i })));
+    setVatMode(h.vatMode);
+    setQuoteNo('');
+    setStep(3);
+    setDraftMsg(`'${h.customer || '받는 분 없음'}' 견적서를 복사했어요. 날짜는 오늘로 바꿨어요.`);
+    trackEvent('history_load', h.id);
+    window.scrollTo({ top: 0 });
+  };
+  const addFreq = (f: FreqItem) => {
+    const blank = items.find(i => !i.name.trim());
+    if (blank) setItems(items.map(i => i.id === blank.id ? { ...i, name: f.name, spec: f.spec, price: f.price || '', count: i.count || 1 } : i));
+    else setItems([...items, { id: Date.now(), name: f.name, spec: f.spec, count: 1, price: f.price || '' }]);
+    trackEvent('freq_item_add', f.name);
   };
 
-  const executeDownload = () => {
-    if (!printRef.current) return;
-    toJpeg(printRef.current, { quality: 0.95, backgroundColor: '#ffffff' })
-      .then((dataUrl) => {
-        const a = document.createElement('a'); a.href = dataUrl;
-        a.download = `견적서_${info.customer || "미지정"}.jpg`;
-        document.body.appendChild(a); a.click();
-        document.body.removeChild(a);
-        setShowAdModal(false); setDownloadType(null);
-        setDoneMsg('견적서 이미지가 저장됐어요.\n폰은 갤러리(사진), 컴퓨터는 다운로드 폴더에서 확인하세요.');
-      });
-  };
-
-  const handleAdConfirm = () => {
-    if (downloadType === 'JPG') executeDownload();
-    else if (downloadType === 'XLSX') { exportToExcel(); setShowAdModal(false); setDownloadType(null); }
+  // ── 🎤 말로 적기 (지원되는 폰에서만 버튼이 보인다) ─────────────
+  const startVoice = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+    const r = new SR();
+    r.lang = 'ko-KR'; r.interimResults = false; r.maxAlternatives = 1;
+    r.onresult = (e: any) => {
+      const t: string = e.results[0][0].transcript;
+      setQuickText(q => (q.trim() ? q.replace(/\s*$/, '') + '\n' : '') + t);
+      trackEvent('voice_input', 'ok');
+    };
+    r.onend = () => setListening(false);
+    r.onerror = () => { setListening(false); alert('잘 못 들었어요. 🎤 버튼을 다시 누르고 또박또박 말씀해 주세요.'); };
+    setListening(true);
+    try { r.start(); } catch { setListening(false); }
   };
 
   const addItem = () => {
@@ -541,6 +526,7 @@ const exportToExcel = async () => {
     if (!validateBeforePreview()) { setStep(3); return; }
     saveProfile(true);          // 사업자 정보·도장은 조용히 기억해 둔다
     localStorage.setItem('smartbill.guideSeen', '1');   // 한 번 만들어 봤으면 다음엔 가이드 접기
+    recordHistory(ensureQuoteNo());   // 지난 견적서·자주 쓰는 품목으로 기억
     setShowPreview(true);
   };
   const updateItem = (id: number, key: keyof BillItem, value: any) => setItems(items.map(i => i.id === id ? { ...i, [key]: value } : i));
@@ -556,10 +542,21 @@ const exportToExcel = async () => {
               <h1 className="text-lg font-extrabold text-slate-900 leading-tight truncate">견적서 만들기</h1>
               <p className="text-[12px] text-slate-500 truncate">무료 · 가입 없음 · 내 폰에만 저장</p>
             </div>
-            <button id="btn-preview-any" onClick={() => { trackEvent('click_preview_any', `step${step}`); setShowPreview(true); }}
+            <button id="btn-preview-any" onClick={() => { trackEvent('click_preview_any', `step${step}`); ensureQuoteNo(); setShowPreview(true); }}
                     className="text-[14px] font-extrabold text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 whitespace-nowrap">👁 미리보기</button>
             <button onClick={() => resetAll()} className="text-[13px] font-bold text-slate-400 hover:text-red-500 px-1 py-2 whitespace-nowrap">지우기</button>
           </div>
+          {inApp && (
+            <div id="inapp-banner" className="max-w-xl mx-auto mt-2 bg-yellow-50 border-2 border-yellow-300 rounded-xl px-3 py-2 text-[14px] text-slate-800">
+              <b>⚠️ {inApp === 'kakao' ? '카카오톡' : '앱'} 안에서 열렸어요.</b> 여기서는 저장·보내기가 안 될 수 있어요.
+              {inApp === 'kakao' ? (
+                <a href={kakaoExternalUrl(typeof window !== 'undefined' ? window.location.href : '')}
+                   className="block mt-2 text-center py-3 rounded-xl bg-yellow-400 font-extrabold text-base text-slate-900">🌐 크롬(사파리)으로 열기</a>
+              ) : (
+                <p className="mt-1">오른쪽 위 <b>⋮</b> 또는 <b>공유</b> 버튼을 눌러 <b>다른 브라우저로 열기</b>를 선택하세요.</p>
+              )}
+            </div>
+          )}
           {draftMsg && (
             <div id="draft-msg" className="max-w-xl mx-auto mt-2 flex items-center justify-between gap-2 bg-green-50 border border-green-200 rounded-xl px-3 py-2 text-[14px] text-green-800">
               <span>↩️ {draftMsg}</span>
@@ -601,9 +598,27 @@ const exportToExcel = async () => {
               </div>
               <label className="block">
                 <span className="big-label">받는 분 (회사명 또는 이름)</span>
-                <input id="f-customer" type="text" placeholder="예: 홍길동 / 한빛아파트 관리사무소" value={info.customer} className="input-style"
+                <input id="f-customer" type="text" list="customer-list" placeholder="예: 홍길동 / 한빛아파트 관리사무소" value={info.customer} className="input-style"
                        onChange={e => setInfo({ ...info, customer: e.target.value })} />
+                <datalist id="customer-list">
+                  {Array.from(new Set(history.map(h => h.customer).filter(Boolean))).map(c => <option key={c} value={c} />)}
+                </datalist>
               </label>
+              {history.length > 0 && (
+                <div id="history-card" className="bg-white rounded-2xl border border-slate-200 p-4 space-y-2">
+                  <span className="big-label">📂 지난 견적서 — 누르면 복사해서 새로 만들어요</span>
+                  {history.slice(0, 5).map(h => (
+                    <button key={h.id} onClick={() => loadHistory(h)}
+                            className="history-item w-full flex items-center justify-between gap-2 text-left px-3 py-3 rounded-xl bg-slate-50 hover:bg-slate-100">
+                      <span className="min-w-0">
+                        <b className="block text-base text-slate-900 truncate">{h.customer || '(받는 분 없음)'}</b>
+                        <span className="text-[13px] text-slate-500">{h.date.replace(/-/g, '.')} · 품목 {h.items.length}개</span>
+                      </span>
+                      <b className="text-blue-700 whitespace-nowrap">{h.total.toLocaleString()}원</b>
+                    </button>
+                  ))}
+                </div>
+              )}
               <label className="block">
                 <span className="big-label">견적 날짜</span>
                 <input type="date" value={info.date} className="input-style" onChange={e => setInfo({ ...info, date: e.target.value })} />
@@ -693,6 +708,14 @@ const exportToExcel = async () => {
                 <span className="big-label">주소 <span className="text-slate-400 font-medium">(선택)</span></span>
                 <input type="text" placeholder="예: 서울 강남구 학동로 28" value={info.address} className="input-style" onChange={e => setInfo({ ...info, address: e.target.value })} />
               </label>
+              <label className="block">
+                <span className="big-label">전화번호 <span className="text-slate-400 font-medium">(선택 — 거래처가 연락할 번호)</span></span>
+                <input id="f-phone" type="tel" inputMode="tel" placeholder="예: 010-1234-5678" value={info.phone} className="input-style" onChange={e => setInfo({ ...info, phone: e.target.value })} />
+              </label>
+              <label className="block">
+                <span className="big-label">입금 계좌 <span className="text-slate-400 font-medium">(선택)</span></span>
+                <input id="f-account" type="text" placeholder="예: 국민은행 123456-01-123456 홍길동" value={info.account} className="input-style" onChange={e => setInfo({ ...info, account: e.target.value })} />
+              </label>
 
               {/* 도장 또는 손 서명 */}
               <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
@@ -778,11 +801,32 @@ const exportToExcel = async () => {
                               className="bg-blue-600 text-white py-4 rounded-2xl font-extrabold text-base shadow hover:bg-blue-700 transition">✨ 자동으로 채우기</button>
                       <button onClick={() => setQuickText(QUICK_EXAMPLE)} className="text-[14px] text-slate-500 px-3 border border-slate-200 rounded-2xl">예시 보기</button>
                     </div>
+                    {voiceOk && (
+                      <button id="btn-voice" onClick={startVoice} disabled={listening}
+                              className={`w-full py-3 rounded-2xl font-extrabold text-base border-2 ${listening ? 'bg-red-50 border-red-300 text-red-600' : 'bg-white border-slate-300 text-slate-700'}`}>
+                        {listening ? '🎙 듣고 있어요… 말씀하세요' : '🎤 말로 적기 (예: "하도 1말 육만칠천원 세 개")'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
               {/* 결과 안내는 입력창을 접어도 보이도록 카드 바깥에 */}
               {quickMsg && <p id="quick-msg" className="text-[15px] text-slate-800 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 whitespace-pre-line leading-relaxed">{quickMsg}</p>}
+
+              {/* 자주 쓰는 품목 */}
+              {freqItems.length > 0 && (
+                <div id="freq-card" className="bg-white rounded-2xl border border-slate-200 p-4 space-y-2">
+                  <span className="big-label">⭐ 자주 쓰는 품목 — 누르면 추가돼요</span>
+                  <div className="flex flex-wrap gap-2">
+                    {freqItems.slice(0, 8).map(f => (
+                      <button key={`${f.name}|${f.spec}`} onClick={() => addFreq(f)}
+                              className="freq-chip px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-[15px] font-bold text-blue-800">
+                        {f.name}{f.spec ? <span className="text-blue-500 font-medium"> {f.spec}</span> : ''} · {f.price.toLocaleString()}원
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* 항목 카드 */}
               <div id="items-section" className="space-y-3">
@@ -891,6 +935,12 @@ const exportToExcel = async () => {
               </div>
 
               <label className="block">
+                <span className="big-label">견적 유효기간</span>
+                <select id="f-valid" value={info.validDays} onChange={e => setInfo({ ...info, validDays: Number(e.target.value) })} className="input-style font-bold">
+                  {[7, 15, 30, 60, 90].map(d => <option key={d} value={d}>발행일로부터 {d}일 ({addDaysLabel(info.date, d)}까지)</option>)}
+                </select>
+              </label>
+              <label className="block">
                 <span className="big-label">비고·특약사항 <span className="text-slate-400 font-medium">(선택)</span></span>
                 <textarea placeholder="예: 계약금 30% 선입금, 자재 변경 시 별도 협의" value={info.remark} className="input-style h-24 !text-base" onChange={e => setInfo({ ...info, remark: e.target.value })} />
               </label>
@@ -921,7 +971,13 @@ const exportToExcel = async () => {
       </div>
 
       {showPreview && (
-      <div className="fixed inset-0 z-50 bg-black/80 flex flex-col items-center justify-start overflow-y-auto pt-4 pb-20 px-2">
+      <div className="fixed inset-0 z-50 bg-black/80 flex flex-col items-center justify-start overflow-y-auto pt-4 pb-24 px-2">
+        {inApp === 'kakao' && (
+          <a href={kakaoExternalUrl(typeof window !== 'undefined' ? window.location.href : '')}
+             className="w-full max-w-[800px] mb-2 text-center py-3 rounded-xl bg-yellow-400 font-extrabold text-base text-slate-900 no-print">
+            ⚠️ 카카오톡 안에서는 저장·보내기가 막힐 수 있어요 — 🌐 크롬으로 열기
+          </a>
+        )}
         <div className="w-full max-w-[800px] flex justify-end mb-2">
           <button id="btn_preview_close" onClick={() => setShowPreview(false)} className="bg-white/20 text-white w-10 h-10 rounded-full text-xl" aria-label="미리보기 닫기">✕</button>
         </div>
@@ -934,12 +990,14 @@ const exportToExcel = async () => {
                 
                 <div className="flex justify-between items-start gap-8 mb-10 text-left">
                   <div className="flex-1">
-                    <p className="text-[12px] text-slate-500 mb-2 font-medium">일자: {info.date.replace(/-/g, '. ')}</p>
+                    <p className="text-[12px] text-slate-500 mb-2 font-medium">일자: {info.date.replace(/-/g, '. ')}{quoteNo && <span className="ml-3">견적번호: {quoteNo}</span>}</p>
                     <p className="text-2xl font-bold border-b-2 border-black pb-1 inline-block min-w-[200px]">{info.customer || '            '} <span className="text-lg font-normal">귀하</span></p>
                     <p className="text-sm mt-3 text-slate-600 font-medium">아래와 같이 견적합니다.</p>
                     <div className="mt-4 text-2xl font-black">
                       합계금액: ₩{totalAmount.toLocaleString()}
                       {withVat && <p className="mt-1 text-xs font-bold text-slate-500 whitespace-nowrap">(부가세 10% 포함)</p>}
+                      <p id="korean-amount" className="mt-1 text-[13px] font-bold text-slate-700 whitespace-nowrap">금 {numToKorean(totalAmount)}원정</p>
+                      <p className="mt-2 text-[11px] font-medium text-slate-500 whitespace-nowrap">유효기간: 발행일로부터 {info.validDays}일 ({addDaysLabel(info.date, info.validDays)}까지)</p>
                     </div>
                   </div>
 
@@ -947,7 +1005,7 @@ const exportToExcel = async () => {
                     <table className="border-collapse border-2 border-black w-full text-[11px] table-fixed">
                       <tbody>
                         <tr>
-                          <td className="border border-black p-1 text-center bg-slate-100 font-bold w-10" rowSpan={4}>공<br/>급<br/>자</td>
+                          <td className="border border-black p-1 text-center bg-slate-100 font-bold w-10" rowSpan={5}>공<br/>급<br/>자</td>
                           <td className="border border-black p-2 bg-slate-100 font-bold text-center w-20">등록번호</td>
                           <td className="border border-black p-2 font-bold" colSpan={3}>
                             {info.bizNumber.length === 10 
@@ -972,6 +1030,10 @@ const exportToExcel = async () => {
                         <tr>
                           <td className="border border-black p-2 bg-slate-100 font-bold text-center">주소</td>
                           <td className="border border-black p-2 text-[10px]" colSpan={3}>{info.address}</td>
+                        </tr>
+                        <tr>
+                          <td className="border border-black p-2 bg-slate-100 font-bold text-center">전화</td>
+                          <td className="border border-black p-2 text-center font-bold" colSpan={3}>{info.phone}</td>
                         </tr>
                         <tr>
                           <td className="border border-black p-2 bg-slate-100 font-bold text-center">업태</td>
@@ -1041,6 +1103,7 @@ const exportToExcel = async () => {
               {/* 하단 고정 비고란 */}
               <div className="border-2 border-black p-5 flex-1 h-[300px] text-[11px] bg-slate-50/50 whitespace-pre-wrap text-left mt-auto">
                 <p className="font-bold underline mb-2">※ 비고 및 특약사항</p>
+                {info.account && <p className="font-bold mb-1">입금계좌: {info.account}</p>}
                 <p>{info.remark || "특이사항 없음"}</p>
               </div>
             </div>
@@ -1051,11 +1114,32 @@ const exportToExcel = async () => {
             <CoupangAd slot={0} title="📦 견적서 보냈다면, 자재도 미리 준비하세요" sub="사장님들이 많이 주문하는 현장 용품" />
           </div>
 
-          {/* 하단 버튼 바 */}
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-900/90 grid grid-cols-2 gap-2 no-print z-[60]">
-            <button id="btn_download_jpg" onClick={() => { trackEvent('click_download_jpg', 'JPG 다운로드 시도'); setDownloadType('JPG'); setShowAdModal(true); }} className="bg-white py-4 rounded-xl font-bold text-sm">이미지 다운로드</button>
-            <button id="btn_print_pdf" onClick={() => { trackEvent('click_print_pdf', 'PDF 인쇄 버튼 클릭'); setTimeout(() => window.print(), 200); }} className="bg-blue-600 text-white py-4 rounded-xl font-bold text-sm">PDF 인쇄</button>
+          {/* 하단 버튼 바: 보내기(카톡·문자) / 저장 */}
+          <div className="fixed bottom-0 left-0 right-0 p-3 bg-slate-900/95 grid grid-cols-[3fr_2fr] gap-2 no-print z-[60]">
+            <button id="btn_share_open" onClick={() => setSheet('share')} className="bg-[#FF7E36] text-white py-4 rounded-2xl font-extrabold text-lg">📨 보내기 (카톡·문자)</button>
+            <button id="btn_save_open" onClick={() => setSheet('save')} className="bg-white text-slate-900 py-4 rounded-2xl font-extrabold text-base">💾 저장</button>
           </div>
+
+          {/* 형식 선택 */}
+          {sheet && (
+            <div className="fixed inset-0 z-[70] bg-black/60 flex items-end justify-center no-print" onClick={() => setSheet(null)}>
+              <div className="bg-white rounded-t-3xl w-full max-w-md p-5 pb-7 space-y-3" onClick={e => e.stopPropagation()}>
+                <h3 className="text-xl font-black text-center text-slate-900">{sheet === 'share' ? '📨 어떤 형식으로 보낼까요?' : '💾 어떤 형식으로 저장할까요?'}</h3>
+                <button id={`opt-${sheet}-jpg`} onClick={() => startAction(sheet, 'jpg')} className="w-full py-4 rounded-2xl bg-[#FF7E36] text-white font-extrabold text-lg">
+                  🖼 이미지 (사진)<span className="block text-[13px] font-medium opacity-90">카톡에서 바로 보여요 — 가장 추천</span>
+                </button>
+                <button id={`opt-${sheet}-pdf`} onClick={() => startAction(sheet, 'pdf')} className="w-full py-4 rounded-2xl bg-blue-600 text-white font-extrabold text-lg">
+                  📄 PDF<span className="block text-[13px] font-medium opacity-90">인쇄하거나 이메일로 보낼 때</span>
+                </button>
+                {sheet === 'save' && (
+                  <button id="opt-save-xlsx" onClick={() => startAction('save', 'xlsx')} className="w-full py-4 rounded-2xl bg-green-600 text-white font-extrabold text-lg">
+                    📊 엑셀<span className="block text-[13px] font-medium opacity-90">숫자를 고쳐서 다시 쓰려면</span>
+                  </button>
+                )}
+                <button onClick={() => setSheet(null)} className="w-full py-3 text-slate-500 font-bold text-base">취소</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1085,7 +1169,7 @@ const exportToExcel = async () => {
         <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-5 w-full max-w-md text-center space-y-3 shadow-2xl max-h-[92vh] overflow-y-auto">
             <h3 className="text-xl font-black">잠깐만요, {AD_SECONDS}초만 기다려 주세요</h3>
-            <p className="text-[15px] text-slate-500">광고가 끝나면 아래 <b>저장하기</b> 버튼이 켜져요.</p>
+            <p className="text-[15px] text-slate-500">{pending?.kind ? FILE_LABEL[pending.kind] : ''} 견적서를 만드는 동안 광고가 나와요. 끝나면 아래 <b>{pending?.mode === 'share' ? '보내기' : '저장하기'}</b> 버튼이 켜져요.</p>
             {AD_VIDEO_URL ? (
               <video src={AD_VIDEO_URL} autoPlay muted playsInline className="w-full rounded-2xl bg-black" onEnded={() => setAdLeft(0)} />
             ) : (
@@ -1096,10 +1180,13 @@ const exportToExcel = async () => {
             </div>
             <div className="grid grid-cols-[1fr_2fr] gap-3 pt-1">
               <button onClick={() => setShowAdModal(false)} className="py-4 rounded-2xl bg-gray-100 font-bold text-slate-500">취소</button>
-              <button id="btn_ad_confirm_save" disabled={adLeft > 0}
-                      onClick={() => { trackEvent('click_ad_save_action', '광고 확인 후 최종 저장 클릭'); handleAdConfirm(); }}
+              <button id="btn_ad_confirm_save" disabled={adLeft > 0 || !genFile}
+                      onClick={() => { trackEvent('click_ad_save_action', pending?.mode || ''); handleAdConfirm(); }}
                       className="py-4 rounded-2xl bg-blue-600 text-white font-extrabold text-lg disabled:bg-slate-300 disabled:text-slate-500">
-                {adLeft > 0 ? `${adLeft}초 후 저장할 수 있어요` : '💾 저장하기'}
+                {adLeft > 0 ? `${adLeft}초 후 ${pending?.mode === 'share' ? '보낼' : '저장할'} 수 있어요`
+                  : genError ? '파일을 못 만들었어요 — 취소 후 다시'
+                  : !genFile ? '⏳ 파일 만드는 중…'
+                  : pending?.mode === 'share' ? '📨 보내기' : '💾 저장하기'}
               </button>
             </div>
           </div>

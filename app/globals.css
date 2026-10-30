@@ -12,12 +12,7 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* 다크모드 전환 없음 — 견적서는 항상 흰 바탕 (폰 다크모드에서 일부가 검게 보이던 문제 방지) */
 
 body {
   background: var(--background);
