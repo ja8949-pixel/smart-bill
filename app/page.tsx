@@ -5,6 +5,11 @@ import { toJpeg } from 'html-to-image';
 import ExcelJS from 'exceljs';
 import { removeStampBackground, shrinkForStorage } from './stampCutout';
 import { parseQuoteText } from './quickParse';
+import SignaturePad from './SignaturePad';
+
+// 저장 전 광고: 영상 광고를 받으면 여기에 mp4 주소만 넣으면 된다 (없으면 쿠팡 위젯 + 텐핑 이미지로 5초)
+const AD_VIDEO_URL = '';
+const AD_SECONDS = 5;
 
 // 이 기기(브라우저)에 기억해 두는 공급자 정보 — 로그인 없이 다음에 바로 불러온다
 interface SavedProfile {
@@ -48,14 +53,14 @@ function CoupangAd({ slot, title, sub }: { slot: number; title: string; sub?: st
   );
 }
 
-const QUICK_EXAMPLE = `공급자: 일광페인팅
-홍길동 귀하
-15평기준
-하도:1말67000×3=201000
-중도:1말66000×6=396000
-신나:62000
-조공1일200000×3=600000
-식대및기타잡자재:300000`;
+// 예시는 "띄어쓰기만" 하는 가장 쉬운 형태로. (하도:1말67000×3=201000 같은 형식도 그대로 읽힌다)
+const QUICK_EXAMPLE = `받는분 홍길동
+공급자 일광페인팅
+하도 1말 67000 3
+중도 1말 6만6천원 6개
+신나 62000
+기공 3일 35만원
+식대 및 기타 30만원`;
 
 interface BillItem {
   id: number;
@@ -103,6 +108,12 @@ export default function BillApp() {
   const [step, setStep] = useState(1);
   const [showQuick, setShowQuick] = useState(false);
   const [doneMsg, setDoneMsg] = useState('');          // 다운로드 완료 안내
+  const [showSign, setShowSign] = useState(false);     // 손 서명 패드
+  const [stampSource, setStampSource] = useState<'photo' | 'sign' | 'saved' | null>(null);
+  const [adLeft, setAdLeft] = useState(AD_SECONDS);    // 저장 전 광고 남은 초
+  const [installEvt, setInstallEvt] = useState<any>(null);   // 안드로이드 설치 프롬프트
+  const [platform, setPlatform] = useState<'ios' | 'android' | 'other'>('other');
+  const [standalone, setStandalone] = useState(false);       // 이미 홈 화면 앱으로 열림
   const [draftMsg, setDraftMsg] = useState('');        // 작성 중 내용 복원 안내
   const draftReady = useRef(false);                    // 복원이 끝난 뒤부터 저장 시작
   const [stampImage, setStampImage] = useState<string | null>(null);
@@ -151,6 +162,7 @@ export default function BillApp() {
       const original = reader.result as string;
       setStampOriginal(original);
       setStampImage(original);
+      setStampSource('photo');
       cutoutStamp(original);
     };
     reader.readAsDataURL(file);
@@ -162,7 +174,7 @@ export default function BillApp() {
   };
   const applyProfile = (p: SavedProfile) => {
     setInfo(prev => ({ ...prev, provider: p.provider, bizNumber: p.bizNumber, address: p.address, category: p.category, sector: p.sector }));
-    if (p.stamp) { setStampImage(p.stamp); setStampOriginal(null); }   // 저장본은 이미 배경이 지워진 상태
+    if (p.stamp) { setStampImage(p.stamp); setStampOriginal(null); setStampSource('saved'); }   // 저장본은 이미 배경이 지워진 상태
   };
   useEffect(() => {
     const list = readProfiles();
@@ -193,6 +205,34 @@ export default function BillApp() {
     if (!draftReady.current) return;
     try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ info, items, vatMode, step })); } catch {}
   }, [info, items, vatMode, step]);
+
+  // 홈 화면 추가: 안드로이드는 설치 프롬프트를 잡아 두고 버튼 하나로, 아이폰은 그림 안내
+  useEffect(() => {
+    const ua = navigator.userAgent;
+    setPlatform(/iPhone|iPad|iPod/.test(ua) ? 'ios' : /Android/.test(ua) ? 'android' : 'other');
+    const sa = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
+    setStandalone(sa);
+    const onPrompt = (e: Event) => { e.preventDefault(); setInstallEvt(e); };
+    window.addEventListener('beforeinstallprompt', onPrompt);
+    window.addEventListener('appinstalled', () => { setStandalone(true); trackEvent('pwa_installed', platform); });
+    return () => window.removeEventListener('beforeinstallprompt', onPrompt);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const installApp = async () => {
+    if (!installEvt) return;
+    trackEvent('pwa_install_click', 'android');
+    installEvt.prompt();
+    try { await installEvt.userChoice; } catch {}
+    setInstallEvt(null);
+  };
+
+  // 저장 전 광고 카운트다운
+  useEffect(() => {
+    if (!showAdModal) return;
+    setAdLeft(AD_SECONDS);
+    const t = setInterval(() => setAdLeft(s => (s <= 1 ? 0 : s - 1)), 1000);
+    return () => clearInterval(t);
+  }, [showAdModal]);
 
   const startFresh = () => {
     localStorage.removeItem(DRAFT_KEY);
@@ -575,6 +615,31 @@ const exportToExcel = async () => {
                   <p className="mt-1">한 번 적은 사업자 정보와 도장은 다음부터 자동으로 채워져요.</p>
                 </div>
               )}
+              {!standalone && (
+                <div id="install-card" className="bg-white rounded-2xl border-2 border-green-200 p-4 space-y-3">
+                  <p className="text-base font-extrabold text-slate-800">📱 폰 바탕화면에 넣어 두면 다음엔 한 번에 열려요</p>
+                  {platform === 'android' && installEvt ? (
+                    <>
+                      <button id="btn-install" onClick={installApp} className="w-full py-4 rounded-2xl bg-green-600 text-white font-extrabold text-lg">📲 바탕화면에 추가하기</button>
+                      <p className="text-[14px] text-slate-500">누르면 나오는 창에서 <b>[설치]</b> 또는 <b>[추가]</b>를 누르세요. 끝!</p>
+                    </>
+                  ) : platform === 'ios' ? (
+                    <ol className="space-y-2 text-[15px] text-slate-700 leading-relaxed">
+                      <li className="flex gap-2"><b className="text-green-700 shrink-0">①</b><span>화면 <b>맨 아래 가운데</b>에 있는 <b>공유 버튼</b> <span className="inline-block border border-slate-400 rounded px-1 text-[13px]">⬆︎ 네모에서 화살표가 위로 나온 모양</span>을 누르세요.</span></li>
+                      <li className="flex gap-2"><b className="text-green-700 shrink-0">②</b><span>나오는 목록을 <b>아래로 내려서</b> <b>[홈 화면에 추가]</b>를 누르세요.</span></li>
+                      <li className="flex gap-2"><b className="text-green-700 shrink-0">③</b><span>오른쪽 위 <b>[추가]</b>를 누르면 끝! 바탕화면에 <b>'견적서'</b> 아이콘이 생겨요.</span></li>
+                    </ol>
+                  ) : platform === 'android' ? (
+                    <ol className="space-y-2 text-[15px] text-slate-700 leading-relaxed">
+                      <li className="flex gap-2"><b className="text-green-700 shrink-0">①</b><span>화면 <b>오른쪽 위</b>의 <b>점 세 개 (⋮)</b>를 누르세요.</span></li>
+                      <li className="flex gap-2"><b className="text-green-700 shrink-0">②</b><span><b>[홈 화면에 추가]</b> 또는 <b>[앱 설치]</b>를 누르세요.</span></li>
+                      <li className="flex gap-2"><b className="text-green-700 shrink-0">③</b><span><b>[추가]</b>를 누르면 끝! 바탕화면에 <b>'견적서'</b> 아이콘이 생겨요.</span></li>
+                    </ol>
+                  ) : (
+                    <p className="text-[15px] text-slate-600">폰으로 이 주소를 열면 바탕화면에 넣는 방법이 나와요. 컴퓨터에서는 주소창 오른쪽 끝의 <b>설치 아이콘</b>을 누르세요.</p>
+                  )}
+                </div>
+              )}
               <CoupangAd slot={0} title="🛒 사장님들이 많이 찾는 상품" sub="로켓배송 — 오늘 주문하면 내일 도착해요" />
             </section>
           )}
@@ -629,38 +694,48 @@ const exportToExcel = async () => {
                 <input type="text" placeholder="예: 서울 강남구 학동로 28" value={info.address} className="input-style" onChange={e => setInfo({ ...info, address: e.target.value })} />
               </label>
 
-              {/* 도장 */}
+              {/* 도장 또는 손 서명 */}
               <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
-                <span className="big-label">도장 <span className="text-slate-400 font-medium">(선택)</span></span>
+                <span className="big-label">도장 또는 서명 <span className="text-slate-400 font-medium">(선택)</span></span>
                 <input type="file" accept="image/*" ref={fileInputRef} hidden
                        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleStampFile(f); e.target.value = ''; }} />
                 {stampImage && !stampBusy ? (
                   <div className="flex items-center gap-4">
-                    <div className="w-20 h-20 rounded-xl shrink-0 flex items-center justify-center border border-slate-200"
+                    <div className="w-24 h-20 rounded-xl shrink-0 flex items-center justify-center border border-slate-200 p-1"
                          style={{ backgroundImage: 'conic-gradient(#e5e7eb 25%, #fff 0 50%, #e5e7eb 0 75%, #fff 0)', backgroundSize: '12px 12px' }}>
                       <img src={stampImage} alt="도장 미리보기" className="max-w-full max-h-full object-contain" />
                     </div>
                     <div className="flex-1 space-y-2">
-                      <p className="text-[15px] text-slate-700 font-bold">
-                        {!stampOriginal ? '저장해 둔 도장을 쓰고 있어요.' : stampImage !== stampOriginal ? '배경을 투명하게 지웠어요.' : '원본 그대로 쓰고 있어요.'}
+                      <p id="stamp-note" className="text-[15px] text-slate-700 font-bold">
+                        {stampSource === 'sign' ? '손으로 쓴 서명을 쓰고 있어요.'
+                          : stampSource === 'saved' ? '저장해 둔 도장(서명)을 쓰고 있어요.'
+                          : stampOriginal && stampImage !== stampOriginal ? '도장 배경을 투명하게 지웠어요.'
+                          : '원본 사진 그대로 쓰고 있어요.'}
                       </p>
                       <div className="flex flex-wrap gap-2">
-                        <button onClick={() => fileInputRef.current?.click()} className="text-[15px] font-bold text-blue-700 bg-blue-50 px-3 py-2 rounded-xl">다른 사진으로</button>
-                        {stampOriginal && (
+                        <button onClick={() => fileInputRef.current?.click()} className="text-[15px] font-bold text-blue-700 bg-blue-50 px-3 py-2 rounded-xl">📸 사진으로</button>
+                        <button onClick={() => setShowSign(true)} className="text-[15px] font-bold text-blue-700 bg-blue-50 px-3 py-2 rounded-xl">✍️ 다시 서명</button>
+                        {stampSource === 'photo' && stampOriginal && (
                           <button onClick={() => stampImage !== stampOriginal ? setStampImage(stampOriginal) : cutoutStamp(stampOriginal)}
                                   className="text-[15px] font-bold text-slate-600 bg-slate-100 px-3 py-2 rounded-xl">
                             {stampImage !== stampOriginal ? '원본으로' : '배경 지우기'}
                           </button>
                         )}
-                        <button onClick={() => { setStampImage(null); setStampOriginal(null); }} className="text-[15px] text-slate-400 px-2 py-2">빼기</button>
+                        <button onClick={() => { setStampImage(null); setStampOriginal(null); setStampSource(null); }} className="text-[15px] text-slate-400 px-2 py-2">빼기</button>
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <button onClick={() => fileInputRef.current?.click()} disabled={stampBusy}
-                          className="w-full bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl py-5 text-slate-600 font-bold text-base hover:bg-slate-100 transition disabled:opacity-60">
-                    {stampBusy ? '⏳ 도장 배경을 지우는 중이에요…' : <>📸 도장 사진 올리기<br /><span className="text-[13px] font-medium text-slate-400">종이에 찍어 폰으로 찍은 사진도 돼요. 배경은 자동으로 지워져요.</span></>}
-                  </button>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button onClick={() => fileInputRef.current?.click()} disabled={stampBusy}
+                            className="bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl py-5 px-2 text-slate-700 font-bold text-base hover:bg-slate-100 transition disabled:opacity-60">
+                      {stampBusy ? '⏳ 배경 지우는 중…' : <>📸 도장 사진<br /><span className="text-[13px] font-medium text-slate-400">찍어서 올리면<br />배경은 자동으로 지워져요</span></>}
+                    </button>
+                    <button id="btn-sign" onClick={() => setShowSign(true)}
+                            className="bg-orange-50 border-2 border-dashed border-orange-300 rounded-2xl py-5 px-2 text-slate-800 font-bold text-base hover:bg-orange-100 transition">
+                      ✍️ 손으로 서명<br /><span className="text-[13px] font-medium text-slate-500">도장이 없으면<br />손가락으로 서명하세요</span>
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -692,7 +767,10 @@ const exportToExcel = async () => {
                 </button>
                 {showQuick && (
                   <div className="px-4 pb-4 space-y-3">
-                    <p className="text-[15px] text-slate-600 leading-relaxed">한 줄에 하나씩 <b className="text-slate-900">품명:단가×수량</b> 순서로 적으세요. 받는 분, 공급자도 같이 적을 수 있어요.</p>
+                    <p className="text-[15px] text-slate-600 leading-relaxed">
+                      한 줄에 하나씩, <b className="text-slate-900">품명 단가 수량</b> 순서로 <b className="text-slate-900">띄어쓰기만</b> 하면 돼요.
+                      <b>6만7천원</b>, <b>30만원</b>처럼 말로 적어도 되고, <b>받는분 홍길동</b>처럼 받는 분·공급자도 같이 적을 수 있어요.
+                    </p>
                     <textarea id="quick-text" value={quickText} onChange={e => setQuickText(e.target.value)} placeholder={QUICK_EXAMPLE}
                               className="input-style h-44 font-mono !text-[15px] leading-relaxed" />
                     <div className="grid grid-cols-[1fr_auto] gap-2">
@@ -885,7 +963,8 @@ const exportToExcel = async () => {
                             <div className="absolute inset-0 flex items-center justify-end pr-3 font-bold text-[13px] z-0 opacity-40">(인)</div>
                             {stampImage && (
                               <div className="relative z-10 flex justify-end items-center h-full pr-1">
-                                <img src={stampImage} className="w-12 h-12 object-contain mix-blend-multiply" alt="도장" />
+                                {/* 도장은 정사각, 손 서명은 가로로 길어서 폭을 더 준다 */}
+                                <img src={stampImage} className="h-12 max-w-[76px] object-contain mix-blend-multiply" alt="도장" />
                               </div>
                             )}
                           </td>
@@ -980,6 +1059,13 @@ const exportToExcel = async () => {
         </div>
       )}
 
+      {showSign && (
+        <SignaturePad
+          onClose={() => setShowSign(false)}
+          onDone={(png) => { setStampImage(png); setStampOriginal(null); setStampSource('sign'); setShowSign(false); trackEvent('signature_done', 'pad'); }}
+        />
+      )}
+
       {doneMsg && (
         <div className="fixed inset-0 z-[110] bg-black/80 flex items-center justify-center p-4 no-print">
           <div id="done-msg" className="bg-white rounded-3xl p-6 w-full max-w-md space-y-4 shadow-2xl">
@@ -989,6 +1075,7 @@ const exportToExcel = async () => {
               <p className="text-[15px] text-slate-600 mt-2 whitespace-pre-line leading-relaxed">{doneMsg}</p>
             </div>
             <CoupangAd slot={1} title="💡 이런 상품도 많이 봐요" sub="오늘 주문하면 내일 도착" />
+            {!standalone && <p className="text-[14px] text-slate-500 text-center">다음엔 더 빨리 쓰려면 첫 화면의 <b>📱 바탕화면에 넣기</b>를 해 두세요.</p>}
             <button onClick={() => setDoneMsg('')} className="w-full py-4 rounded-2xl bg-blue-600 text-white font-extrabold text-lg">확인</button>
           </div>
         </div>
@@ -996,15 +1083,24 @@ const exportToExcel = async () => {
 
       {showAdModal && (
         <div className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-md text-center space-y-4 shadow-2xl">
-            <h3 className="text-xl font-black">다운로드 준비 완료!</h3>
-            <p className="text-sm text-slate-500">아래 광고를 클릭하시면 파일 저장이 시작됩니다.</p>
+          <div className="bg-white rounded-3xl p-5 w-full max-w-md text-center space-y-3 shadow-2xl max-h-[92vh] overflow-y-auto">
+            <h3 className="text-xl font-black">잠깐만요, {AD_SECONDS}초만 기다려 주세요</h3>
+            <p className="text-[15px] text-slate-500">광고가 끝나면 아래 <b>저장하기</b> 버튼이 켜져요.</p>
+            {AD_VIDEO_URL ? (
+              <video src={AD_VIDEO_URL} autoPlay muted playsInline className="w-full rounded-2xl bg-black" onEnded={() => setAdLeft(0)} />
+            ) : (
+              <CoupangAd slot={1} title="🛒 오늘의 추천 상품" sub="로켓배송 — 내일 도착" />
+            )}
             <div onClick={handleAdConfirm} className="cursor-pointer border border-blue-100 rounded-2xl overflow-hidden">
-              <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" id="btn_ad_medicok" onClick={() => trackEvent('click_ad_image', '메디콕 광고 이미지 클릭')} className="block"><img src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Dis_20251117151015.jpg" className="w-full" /><div className="p-3 bg-blue-50 text-blue-700 font-bold text-sm">맞춤형 건강기능식품 메디콕! (클릭 시 저장)</div></a>
+              <a href="https://iryan.kr/t8f69fuddg" target="_blank" rel="noreferrer" id="btn_ad_medicok" onClick={() => trackEvent('click_ad_image', '메디콕 광고 이미지 클릭')} className="block"><img src="http://img.tenping.kr/Content/Upload/Images/2025111715060001_Dis_20251117151015.jpg" className="w-full" /><div className="p-2 bg-blue-50 text-blue-700 font-bold text-[14px]">맞춤형 건강기능식품 메디콕 (누르면 바로 저장돼요)</div></a>
             </div>
-            <div className="grid grid-cols-2 gap-3 mt-4">
-              <button onClick={() => setShowAdModal(false)} className="py-4 rounded-2xl bg-gray-100 font-bold text-slate-400">취소</button>
-              <button id="btn_ad_confirm_save" onClick={() => { trackEvent('click_ad_save_action', '광고 확인 후 최종 저장 클릭'); handleAdConfirm(); }} className="py-4 rounded-2xl bg-blue-600 text-white font-bold">광고 보고 저장하기</button>
+            <div className="grid grid-cols-[1fr_2fr] gap-3 pt-1">
+              <button onClick={() => setShowAdModal(false)} className="py-4 rounded-2xl bg-gray-100 font-bold text-slate-500">취소</button>
+              <button id="btn_ad_confirm_save" disabled={adLeft > 0}
+                      onClick={() => { trackEvent('click_ad_save_action', '광고 확인 후 최종 저장 클릭'); handleAdConfirm(); }}
+                      className="py-4 rounded-2xl bg-blue-600 text-white font-extrabold text-lg disabled:bg-slate-300 disabled:text-slate-500">
+                {adLeft > 0 ? `${adLeft}초 후 저장할 수 있어요` : '💾 저장하기'}
+              </button>
             </div>
           </div>
         </div>

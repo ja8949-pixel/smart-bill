@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Script from "next/script";
@@ -16,6 +16,16 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "SMART BILL",
   description: "스마트한 견적서 생성기",
+  // 홈 화면에 추가(앱처럼 설치)용
+  manifest: "/manifest.json",
+  icons: { icon: "/icons/icon-192.png", apple: "/icons/apple-touch-icon.png" },
+  appleWebApp: { capable: true, title: "견적서", statusBarStyle: "default" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#FF7E36",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({

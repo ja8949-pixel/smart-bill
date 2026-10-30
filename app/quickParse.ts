@@ -44,7 +44,7 @@ const INFO_KEYS: [RegExp, keyof ParsedInfo][] = [
   [/^(주소|소재지)$/, 'address'],
   [/^업태$/, 'category'],
   [/^종목$/, 'sector'],
-  [/^(받는\s*분|받는\s*사람|고객명?|수신|거래처|현장명?|귀하)$/, 'customer'],
+  [/^(받는\s*분|받는\s*사람|받는\s*곳|보내는\s*곳|고객명?|수신처?|거래처|현장명?|귀하|to)$/i, 'customer'],
   [/^(일자|날짜|견적일)$/, 'date'],
   [/^(비고|특약\s*사항?|참고)$/, 'remark'],
 ];
@@ -60,14 +60,68 @@ const ITEM_RE2 =
 
 interface ItemMatch { name: string; spec: string; price: string; count?: string; total?: string }
 function matchItem(line: string): ItemMatch | null {
+  // 콜론·×·= 없이 띄어쓰기만 한 줄은 토큰 방식이 정확하다 ("하도 1말 67000 3")
+  if (!/[:×=]/.test(line)) {
+    const t = tokenItem(line);
+    if (t) return t;
+  }
   const a = line.match(ITEM_RE);
   if (a) return { name: a[1], spec: a[2] || '', price: a[3], count: a[4], total: a[5] };
   const b = line.match(ITEM_RE2);
   if (b) return { name: b[1], spec: b[3] ? `${b[2]}${b[3]}` : '', price: b[4], count: b[2], total: b[5] };
-  return null;
+  return tokenItem(line);
 }
 
 const num = (s?: string) => (s ? Number(s.replace(/,/g, '')) : NaN);
+
+// "6만7천", "35만", "1천5백", "2만원" 같은 말로 쓴 금액 → 숫자. 아니면 NaN
+export function koreanNumber(tok: string): number {
+  const t = tok.replace(/원$/, '').replace(/,/g, '');
+  if (/^\d+$/.test(t)) return Number(t);
+  const m = t.match(/^(?:(\d+)억)?(?:(\d+)만)?(?:(\d+)천)?(?:(\d+)백)?(\d+)?$/);
+  if (!m || !/[억만천백]/.test(t)) return NaN;
+  const [, eok, man, cheon, baek, rest] = m;
+  const v = (Number(eok || 0) * 1e8) + (Number(man || 0) * 1e4) + (Number(cheon || 0) * 1e3) + (Number(baek || 0) * 100) + Number(rest || 0);
+  return v > 0 ? v : NaN;
+}
+
+const COUNT_UNITS = /^(개|장|명|회|번|박스|세트|통|병|캔|포|팩|쌍|대|벌|ea|EA|식)$/;
+
+// 띄어쓰기만으로 적은 줄: "하도 1말 67000 3", "식대 30만원", "기공 3일 35만원"
+function tokenItem(line: string): ItemMatch | null {
+  // 1,000 같은 자릿수 쉼표는 먼저 붙이고 나서 쉼표·공백으로 나눈다
+  const joined = line.replace(/(\d),(?=\d{3}(?!\d))/g, '$1').replace(/(\d),(?=\d{3}(?!\d))/g, '$1');
+  const toks = joined.split(/[\s,，]+/).filter(Boolean);
+  if (toks.length < 2) return null;
+  const nameToks: string[] = [];
+  let price = NaN, count = NaN, spec = '';
+  const specToks: string[] = [];
+  for (const tok of toks) {
+    const plain = koreanNumber(tok);
+    if (!isNaN(plain)) {                       // 순수 숫자/말금액: 큰 쪽이 단가, 작은 쪽이 수량
+      if (isNaN(price)) price = plain;
+      else if (isNaN(count)) { count = plain; if (count > price) [price, count] = [count, price]; }
+      else nameToks.push(tok);
+      continue;
+    }
+    const u = tok.match(/^(\d+(?:\.\d+)?)([가-힣a-zA-Z]{1,4})$/);     // 숫자+단위 (1말, 3일, 2개)
+    if (u) {
+      if (COUNT_UNITS.test(u[2])) { if (isNaN(count)) count = Number(u[1]); }
+      else specToks.push(tok);
+      continue;
+    }
+    nameToks.push(tok);
+  }
+  if (isNaN(price) || price <= 0 || !nameToks.length) return null;
+  if (price < 100 && !isNaN(count) && count >= 100) [price, count] = [count, price];
+  if (price < 100 && isNaN(count)) return null;   // "하도 3" 같은 줄은 금액으로 보지 않는다
+  if (specToks.length) {
+    spec = specToks[0];
+    // "기공 3일 35만원" → 수량이 따로 없으면 3일의 3을 수량으로
+    if (isNaN(count)) { const n = Number(spec.match(/^\d+(?:\.\d+)?/)![0]); if (n > 1) { count = n; spec = spec.replace(/^\d+(?:\.\d+)?/, '1'); } }
+  }
+  return { name: nameToks.join(' '), spec, price: String(price), count: isNaN(count) ? undefined : String(count) };
+}
 
 function normalize(line: string): string {
   return line
@@ -107,8 +161,8 @@ export function parseQuoteText(text: string): ParsedQuote {
     }
 
     // 2) 사업자/고객 정보 줄 ("키: 값" 또는 "키 값")
-    const kv = line.match(/^([가-힣\s]{2,8})\s*[:：]\s*(.+)$/) ||
-               line.match(/^([가-힣]{2,6})\s+(.+)$/);
+    const kv = line.match(/^([가-힣a-zA-Z\s]{2,8})\s*[:：]\s*(.+)$/) ||
+               line.match(/^([가-힣a-zA-Z]{2,6})\s+(.+)$/);
     if (kv) {
       const key = kv[1].trim();
       const hit = INFO_KEYS.find(([re]) => re.test(key));
@@ -122,14 +176,15 @@ export function parseQuoteText(text: string): ParsedQuote {
         continue;
       }
     }
-    const honor = line.match(/^(.+?)\s*귀하$/);
-    if (honor) { info.customer = honor[1].trim(); continue; }
+    // "홍길동 귀하", "홍길동님", "한빛아파트 관리사무소 앞", "홍길동 사장님께"
+    const honor = line.match(/^(.+?)\s*(?:귀하|귀중|님께|께|님|사장님|대표님|앞)$/);
+    if (honor && !/\d/.test(honor[1])) { info.customer = honor[1].trim(); continue; }
 
     // 3) 항목 줄
     const m = matchItem(line);
     if (m) {
       const name = m.name.replace(/[:：\-–]+$/, '').trim();
-      let price = num(m.price);
+      let price = isNaN(num(m.price)) ? koreanNumber(m.price) : num(m.price);
       let count = num(m.count);
       const total = num(m.total);
 
