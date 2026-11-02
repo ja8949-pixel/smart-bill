@@ -8,7 +8,7 @@ import SignaturePad from './SignaturePad';
 import { buildExcelBlob } from './exportExcel';
 import { numToKorean, addDaysLabel, makeQuoteNo, detectInApp, kakaoExternalUrl,
          dataUrlToBlob, shareFile, downloadBlob, jpgToPdfBlob, type InApp } from './billUtils';
-import { IS_TOSS, tossSaveFile } from './toss';
+import { IS_TOSS, tossSaveFile, preloadRewardedAd, showRewardedAd } from './toss';
 
 type FileKind = 'jpg' | 'pdf' | 'xlsx';
 const FILE_LABEL: Record<FileKind, string> = { jpg: '이미지', pdf: 'PDF', xlsx: '엑셀' };
@@ -448,7 +448,21 @@ export default function BillApp() {
     }
     setPending(null); setGenFile(null);
   };
-  const handleAdConfirm = () => { finishAction(); };
+  // 토스: 미리보기가 열리면 보상형 광고를 미리 불러 둔다 (표시할 때 기다리지 않게)
+  useEffect(() => { if (IS_TOSS && showPreview) preloadRewardedAd(); }, [showPreview]);
+
+  const [adBusy, setAdBusy] = useState(false);
+  const handleAdConfirm = async () => {
+    if (IS_TOSS && pending && genFile) {
+      if (adBusy) return;
+      setAdBusy(true);
+      const r = await showRewardedAd();
+      setAdBusy(false);
+      trackEvent('toss_rewarded_ad', r);
+      if (r === 'closed') { alert('광고를 끝까지 보시면 저장돼요.\n[광고 보고 저장하기]를 다시 눌러 주세요.'); return; }
+    }
+    finishAction();
+  };
 
   // ── 지난 견적서 / 자주 쓰는 품목 기억 ─────────────────────────
   const readJson = <T,>(key: string, fallback: T): T => {
@@ -1184,7 +1198,7 @@ export default function BillApp() {
             {IS_TOSS ? (
               <>
                 <h3 className="text-xl font-black">견적서 파일을 만들고 있어요</h3>
-                <p className="text-[15px] text-slate-500">{pending?.kind ? FILE_LABEL[pending.kind] : ''} 견적서가 준비되면 아래 <b>{pending?.mode === 'share' ? '보내기' : '저장하기'}</b> 버튼이 켜져요.</p>
+                <p className="text-[15px] text-slate-500">{pending?.kind ? FILE_LABEL[pending.kind] : ''} 견적서가 준비되면 아래 버튼이 켜져요.<br />누르면 <b>짧은 광고</b>가 나오고, 끝까지 보면 {pending?.mode === 'share' ? '바로 저장돼요' : '저장돼요'}.</p>
                 <div className="text-5xl py-4">🧾</div>
               </>
             ) : (
@@ -1203,12 +1217,13 @@ export default function BillApp() {
             )}
             <div className="grid grid-cols-[1fr_2fr] gap-3 pt-1">
               <button onClick={() => setShowAdModal(false)} className="py-4 rounded-2xl bg-gray-100 font-bold text-slate-500">취소</button>
-              <button id="btn_ad_confirm_save" disabled={adLeft > 0 || !genFile}
+              <button id="btn_ad_confirm_save" disabled={adLeft > 0 || !genFile || adBusy}
                       onClick={() => { trackEvent('click_ad_save_action', pending?.mode || ''); handleAdConfirm(); }}
                       className="py-4 rounded-2xl bg-blue-600 text-white font-extrabold text-lg disabled:bg-slate-300 disabled:text-slate-500">
                 {adLeft > 0 ? `${adLeft}초 후 ${pending?.mode === 'share' ? '보낼' : '저장할'} 수 있어요`
                   : genError ? '파일을 못 만들었어요 — 취소 후 다시'
                   : !genFile ? '⏳ 파일 만드는 중…'
+                  : IS_TOSS ? '▶ 광고 보고 저장하기'
                   : pending?.mode === 'share' ? '📨 보내기' : '💾 저장하기'}
               </button>
             </div>
