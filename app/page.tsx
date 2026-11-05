@@ -14,6 +14,7 @@ type FileKind = 'jpg' | 'pdf' | 'xlsx';
 const FILE_LABEL: Record<FileKind, string> = { jpg: '이미지', pdf: 'PDF', xlsx: '엑셀' };
 const HISTORY_KEY = 'smartbill.history.v1';     // 지난 견적서
 const FREQ_KEY = 'smartbill.freqItems.v1';      // 자주 쓰는 품목
+const HISTORY_MAX = 300;                        // 견적서함 보관 개수 (1건 1~2KB — 폰 저장공간 걱정 없음)
 interface HistoryEntry {
   id: string; date: string; customer: string; provider: string; total: number;
   info: MasterInfo; items: BillItem[]; vatMode: 'none' | 'include'; savedAt: number;
@@ -155,6 +156,10 @@ export default function BillApp() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [freqItems, setFreqItems] = useState<FreqItem[]>([]);
   const [inApp, setInApp] = useState<InApp>(null);
+  const [showBox, setShowBox] = useState(false);      // 📂 견적서함
+  const [boxQuery, setBoxQuery] = useState('');
+  const [freqAll, setFreqAll] = useState(false);      // 자주 쓰는 품목 전체 보기
+  const backupInputRef = useRef<HTMLInputElement>(null);
   const [voiceOk, setVoiceOk] = useState(false);
   const [listening, setListening] = useState(false);
 
@@ -276,6 +281,14 @@ export default function BillApp() {
     const last = localStorage.getItem(LAST_PROFILE_KEY);
     const p = readProfiles().find(x => x.provider === last);
     if (p) applyProfile(p);
+  };
+  // 다음 견적서 쓰기: 견적 내용만 비우고 내 사업자 정보·도장은 그대로 (헤더 🗑 · 완료창 · 4단계에서)
+  const newQuote = (ask = true) => {
+    if (ask && !confirm('지금 쓰는 견적 내용을 지우고 새로 쓸까요?\n(내 사업자 정보·도장은 그대로 둬요. 만든 견적서는 📂 견적서함에 있어요.)')) return;
+    startFresh();
+    setShowPreview(false); setDoneMsg('');
+    trackEvent('new_quote', ask ? 'ask' : 'direct');
+    window.scrollTo({ top: 0 });
   };
 
   const saveProfile = async (silent = false) => {
@@ -481,7 +494,7 @@ export default function BillApp() {
       const named = items.filter(i => i.name.trim());
       const entry: HistoryEntry = { id: qn, date: info.date, customer: info.customer, provider: info.provider,
         total: totalAmount, info, items: named, vatMode, savedAt: Date.now() };
-      const hist = [entry, ...readJson<HistoryEntry[]>(HISTORY_KEY, []).filter(h => h.id !== qn)].slice(0, 30);
+      const hist = [entry, ...readJson<HistoryEntry[]>(HISTORY_KEY, []).filter(h => h.id !== qn)].slice(0, HISTORY_MAX);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
       setHistory(hist);
       const freq = readJson<FreqItem[]>(FREQ_KEY, []);
@@ -496,16 +509,94 @@ export default function BillApp() {
       setFreqItems(freq.slice(0, 40));
     } catch {}
   };
+  // 그 견적서를 쓸 때의 도장도 같이 (사업자 정보에 저장된 도장)
+  const applyStampOf = (provider: string) => {
+    const p = readProfiles().find(x => x.provider === provider);
+    if (p?.stamp) { setStampImage(p.stamp); setStampOriginal(null); setStampSource('saved'); }
+  };
   const loadHistory = (h: HistoryEntry) => {
     const today = new Date().toISOString().split('T')[0];
     setInfo(prev => ({ ...prev, ...h.info, date: today }));
     setItems(h.items.map((it, i) => ({ ...it, id: Date.now() + i })));
     setVatMode(h.vatMode);
     setQuoteNo('');
+    applyStampOf(h.provider);
+    setShowBox(false);
     setStep(3);
     setDraftMsg(`'${h.customer || '받는 분 없음'}' 견적서를 복사했어요. 날짜는 오늘로 바꿨어요.`);
     trackEvent('history_load', h.id);
     window.scrollTo({ top: 0 });
+  };
+  // 그때 그 견적서 그대로 (날짜·견적번호 그대로) 다시 열어서 보내기
+  const reopenHistory = (h: HistoryEntry) => {
+    setInfo(prev => ({ ...prev, ...h.info }));
+    setItems(h.items.map((it, i) => ({ ...it, id: Date.now() + i })));
+    setVatMode(h.vatMode);
+    setQuoteNo(h.id);
+    applyStampOf(h.provider);
+    setShowBox(false);
+    setStep(4);
+    setShowPreview(true);
+    trackEvent('history_reopen', h.id);
+  };
+  const deleteHistory = (h: HistoryEntry) => {
+    if (!confirm(`'${h.customer || '받는 분 없음'}' 견적서(${h.date.replace(/-/g, '.')})를 지울까요?\n지우면 되돌릴 수 없어요.`)) return;
+    const hist = readJson<HistoryEntry[]>(HISTORY_KEY, []).filter(x => x.id !== h.id);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
+    setHistory(hist);
+  };
+
+  // ── 백업 / 복원: 폰을 바꾸거나 앱 데이터가 지워져도 그대로 ─────────
+  const exportBackup = async () => {
+    const data = { app: 'smart-bill', v: 1, at: Date.now(), profiles: readProfiles(),
+      lastProfile: localStorage.getItem(LAST_PROFILE_KEY), history: readJson<HistoryEntry[]>(HISTORY_KEY, []), freq: readJson<FreqItem[]>(FREQ_KEY, []) };
+    const file = new File([JSON.stringify(data)], `견적서백업_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.json`, { type: 'application/json' });
+    if (!(await tossSaveFile(file))) downloadBlob(file, file.name);
+    trackEvent('backup_export', String(data.history.length));
+    alert(`백업 파일을 저장했어요. (견적서 ${data.history.length}건, 사업자 정보 ${data.profiles.length}개)\n\n'${file.name}' 파일이 폰의 다운로드(파일 앱)에 있어요.\n카톡 '나와의 채팅'에 보내 두면 폰을 바꿔도 안전해요.\n새 폰에서는 [📥 백업 불러오기]로 이 파일을 고르세요.`);
+  };
+  const importBackup = async (file: File) => {
+    try {
+      const d = JSON.parse(await file.text());
+      if (d?.app !== 'smart-bill' || !Array.isArray(d.history)) throw new Error('not backup');
+      const byId = new Map<string, HistoryEntry>();
+      for (const h of [...readJson<HistoryEntry[]>(HISTORY_KEY, []), ...d.history]) {
+        const prev = byId.get(h.id);
+        if (!prev || h.savedAt > prev.savedAt) byId.set(h.id, h);
+      }
+      const hist = [...byId.values()].sort((a, b) => b.savedAt - a.savedAt).slice(0, HISTORY_MAX);
+      const profs = readProfiles();
+      let addedProf = 0;
+      for (const p of (d.profiles || []) as SavedProfile[]) if (!profs.some(x => x.provider === p.provider)) { profs.push(p); addedProf++; }
+      const freq = readJson<FreqItem[]>(FREQ_KEY, []);
+      for (const f of (d.freq || []) as FreqItem[]) {
+        const g = freq.find(x => x.name === f.name && x.spec === f.spec);
+        if (g) { g.uses = Math.max(g.uses, f.uses); if (f.last > g.last) { g.price = f.price; g.last = f.last; } } else freq.push(f);
+      }
+      freq.sort((a, b) => b.uses - a.uses || b.last - a.last);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(hist));
+      localStorage.setItem(PROFILES_KEY, JSON.stringify(profs));
+      localStorage.setItem(FREQ_KEY, JSON.stringify(freq.slice(0, 40)));
+      if (!localStorage.getItem(LAST_PROFILE_KEY) && d.lastProfile) localStorage.setItem(LAST_PROFILE_KEY, d.lastProfile);
+      setHistory(hist); setProfiles(profs); setFreqItems(freq.slice(0, 40));
+      if (!info.provider.trim()) {
+        const p = profs.find(x => x.provider === (localStorage.getItem(LAST_PROFILE_KEY) || '')) || profs[0];
+        if (p) applyProfile(p);
+      }
+      trackEvent('backup_import', String(d.history.length));
+      alert(`백업을 불러왔어요!\n견적서 ${hist.length}건, 사업자 정보 ${addedProf}개 추가.`);
+    } catch {
+      alert("백업 파일이 아니에요.\n'견적서백업_날짜.json' 파일을 골라 주세요.");
+    }
+  };
+
+  // 품목 이름을 적으면 지난번 단가·규격을 알아서 채운다 (단가가 비어 있을 때만)
+  const onItemName = (id: number, v: string) => {
+    const f = freqItems.find(x => x.name === v.trim());
+    setItems(items.map(i => i.id !== id ? i : {
+      ...i, name: v,
+      ...(f && !(Number(i.price) > 0) ? { price: f.price || '', spec: i.spec || f.spec } : {}),
+    }));
   };
   const addFreq = (f: FreqItem) => {
     const blank = items.find(i => !i.name.trim());
@@ -558,6 +649,26 @@ export default function BillApp() {
   };
   const updateItem = (id: number, key: keyof BillItem, value: any) => setItems(items.map(i => i.id === id ? { ...i, [key]: value } : i));
 
+  // 단골 거래처: 최근에 보낸 순서 + 몇 번 보냈는지
+  const customers: { name: string; count: number }[] = [];
+  for (const h of history) {
+    const n = (h.customer || '').trim();
+    if (!n) continue;
+    const c = customers.find(x => x.name === n);
+    if (c) c.count++; else customers.push({ name: n, count: 1 });
+  }
+  const custHist = info.customer.trim() ? history.filter(h => (h.customer || '').trim() === info.customer.trim()) : [];
+  // 견적서함 검색: 띄어쓰기로 나눈 단어가 모두 (받는 분·품목·공급자·견적번호) 안에 있으면
+  const boxTerms = boxQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const boxList = history.filter(h => {
+    if (!boxTerms.length) return true;
+    const hay = [h.customer, h.provider, h.id, h.date, ...h.items.map(i => `${i.name} ${i.spec}`)].join(' ').toLowerCase();
+    return boxTerms.every(t => hay.includes(t));
+  });
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const monthList = history.filter(h => h.date.startsWith(thisMonth));
+  const won = (n: number) => `${n.toLocaleString()}원`;
+
   return (
     <div className="min-h-screen bg-gray-100 font-sans text-slate-900 pb-10">
       <div className="no-print pb-28">
@@ -566,12 +677,22 @@ export default function BillApp() {
           <div className="max-w-xl mx-auto flex items-center gap-3">
             <img src="/images/smart_bill_logo.jpg" alt="로고" className="h-12 w-12 rounded-xl" />
             <div className="flex-1 min-w-0">
-              <h1 className="text-lg font-extrabold text-slate-900 leading-tight truncate">견적서 만들기</h1>
+              <h1 className="text-base font-extrabold text-slate-900 leading-tight truncate">견적서 만들기</h1>
               <p className="text-[12px] text-slate-500 truncate">무료 · 가입 없음 · 내 폰에만 저장</p>
             </div>
+            {/* 아이콘 위·글씨 아래 — 좁은 폰에서도 세 버튼이 다 보이게 */}
+            <button id="btn-box" onClick={() => { setBoxQuery(''); setShowBox(true); trackEvent('open_box', String(history.length)); }}
+                    className="relative flex flex-col items-center justify-center w-14 h-12 rounded-xl bg-slate-100 text-slate-800 shrink-0">
+              <span className="text-lg leading-none">📂</span><span className="text-[11px] font-extrabold mt-0.5">견적서함</span>
+              {history.length > 0 && <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-[#FF7E36] text-white text-[11px] font-black flex items-center justify-center">{history.length}</span>}
+            </button>
             <button id="btn-preview-any" onClick={() => { trackEvent('click_preview_any', `step${step}`); ensureQuoteNo(); setShowPreview(true); }}
-                    className="text-[14px] font-extrabold text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 whitespace-nowrap">👁 미리보기</button>
-            <button onClick={() => resetAll()} className="text-[13px] font-bold text-slate-400 hover:text-red-500 px-1 py-2 whitespace-nowrap">지우기</button>
+                    className="flex flex-col items-center justify-center w-14 h-12 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 shrink-0">
+              <span className="text-lg leading-none">👁</span><span className="text-[11px] font-extrabold mt-0.5">미리보기</span>
+            </button>
+            <button id="btn-new" onClick={() => newQuote()} className="flex flex-col items-center justify-center w-12 h-12 rounded-xl text-slate-500 hover:text-[#FF7E36] shrink-0">
+              <span className="text-lg leading-none">✚</span><span className="text-[11px] font-bold mt-0.5">새로 쓰기</span>
+            </button>
           </div>
           {inApp && (
             <div id="inapp-banner" className="max-w-xl mx-auto mt-2 bg-yellow-50 border-2 border-yellow-300 rounded-xl px-3 py-2 text-[14px] text-slate-800">
@@ -628,22 +749,39 @@ export default function BillApp() {
                 <input id="f-customer" type="text" list="customer-list" placeholder="예: 홍길동 / 한빛아파트 관리사무소" value={info.customer} className="input-style"
                        onChange={e => setInfo({ ...info, customer: e.target.value })} />
                 <datalist id="customer-list">
-                  {Array.from(new Set(history.map(h => h.customer).filter(Boolean))).map(c => <option key={c} value={c} />)}
+                  {customers.map(c => <option key={c.name} value={c.name} />)}
                 </datalist>
               </label>
-              {history.length > 0 && (
-                <div id="history-card" className="bg-white rounded-2xl border border-slate-200 p-4 space-y-2">
-                  <span className="big-label">📂 지난 견적서 — 누르면 복사해서 새로 만들어요</span>
-                  {history.slice(0, 5).map(h => (
-                    <button key={h.id} onClick={() => loadHistory(h)}
-                            className="history-item w-full flex items-center justify-between gap-2 text-left px-3 py-3 rounded-xl bg-slate-50 hover:bg-slate-100">
-                      <span className="min-w-0">
-                        <b className="block text-base text-slate-900 truncate">{h.customer || '(받는 분 없음)'}</b>
-                        <span className="text-[13px] text-slate-500">{h.date.replace(/-/g, '.')} · 품목 {h.items.length}개</span>
-                      </span>
-                      <b className="text-blue-700 whitespace-nowrap">{h.total.toLocaleString()}원</b>
-                    </button>
-                  ))}
+
+              {/* 이 분께 보낸 적이 있으면 → 지난 견적을 바로 꺼내 쓰기 */}
+              {custHist.length > 0 && (
+                <div id="cust-last" className="bg-green-50 border-2 border-green-300 rounded-2xl p-4 space-y-3">
+                  <p className="text-base font-extrabold text-slate-900">📄 '{info.customer.trim()}' 님께 보낸 견적서가 {custHist.length}건 있어요</p>
+                  <p className="text-[15px] text-slate-700">가장 최근: <b>{custHist[0].date.replace(/-/g, '.')}</b> · 품목 {custHist[0].items.length}개 · <b className="text-blue-700">{won(custHist[0].total)}</b></p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button id="btn-cust-copy" onClick={() => loadHistory(custHist[0])} className="py-3 rounded-xl bg-green-600 text-white font-extrabold text-base">✏️ 복사해서 고치기</button>
+                    <button id="btn-cust-reopen" onClick={() => reopenHistory(custHist[0])} className="py-3 rounded-xl bg-white border-2 border-green-300 text-green-800 font-extrabold text-base">📨 그대로 보내기</button>
+                  </div>
+                  {custHist.length > 1 && (
+                    <button onClick={() => { setBoxQuery(info.customer.trim()); setShowBox(true); }} className="w-full text-[15px] font-bold text-green-800 underline">이 분 견적서 {custHist.length}건 모두 보기 →</button>
+                  )}
+                </div>
+              )}
+
+              {/* 단골 거래처: 누르면 이름이 채워지고, 위 카드에서 지난 견적을 바로 꺼낸다 */}
+              {customers.length > 0 && !custHist.length && (
+                <div id="history-card" className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+                  <span className="big-label">🔁 자주 보내는 분 — 누르면 바로 채워져요</span>
+                  <div className="flex flex-wrap gap-2">
+                    {customers.slice(0, 8).map(c => (
+                      <button key={c.name} onClick={() => { setInfo({ ...info, customer: c.name }); trackEvent('customer_chip', c.name); }}
+                              className="cust-chip px-4 py-3 rounded-2xl bg-slate-50 border-2 border-slate-200 text-base font-bold text-slate-800">
+                        {c.name} <span className="text-[13px] text-slate-400 font-medium">{c.count}건</span>
+                      </button>
+                    ))}
+                  </div>
+                  <button id="btn-open-box" onClick={() => { setBoxQuery(''); setShowBox(true); }}
+                          className="w-full py-3 rounded-xl bg-slate-100 text-slate-800 font-extrabold text-base">📂 지난 견적서 전체 보기 ({history.length}건)</button>
                 </div>
               )}
               <label className="block">
@@ -843,19 +981,28 @@ export default function BillApp() {
               {/* 자주 쓰는 품목 */}
               {freqItems.length > 0 && (
                 <div id="freq-card" className="bg-white rounded-2xl border border-slate-200 p-4 space-y-2">
-                  <span className="big-label">⭐ 자주 쓰는 품목 — 누르면 추가돼요</span>
+                  <span className="big-label">⭐ 자주 쓰는 품목 — 누르면 지난 단가로 추가돼요</span>
                   <div className="flex flex-wrap gap-2">
-                    {freqItems.slice(0, 8).map(f => (
+                    {freqItems.slice(0, freqAll ? 40 : 8).map(f => (
                       <button key={`${f.name}|${f.spec}`} onClick={() => addFreq(f)}
                               className="freq-chip px-3 py-2 rounded-xl bg-blue-50 border border-blue-200 text-[15px] font-bold text-blue-800">
                         {f.name}{f.spec ? <span className="text-blue-500 font-medium"> {f.spec}</span> : ''} · {f.price.toLocaleString()}원
                       </button>
                     ))}
                   </div>
+                  {freqItems.length > 8 && (
+                    <button id="btn-freq-all" onClick={() => setFreqAll(v => !v)} className="w-full py-2 text-[15px] font-bold text-blue-700">
+                      {freqAll ? '접기 ▲' : `전체 ${freqItems.length}개 보기 ▼`}
+                    </button>
+                  )}
                 </div>
               )}
 
               {/* 항목 카드 */}
+              {/* 품명 자동완성: 한 글자만 쳐도 지난 품목이 뜨고, 고르면 단가까지 채워진다 */}
+              <datalist id="item-names">
+                {Array.from(new Set(freqItems.map(f => f.name))).map(n => <option key={n} value={n} />)}
+              </datalist>
               <div id="items-section" className="space-y-3">
                 {items.map((item, idx) => {
                   const named = !!item.name.trim();
@@ -867,8 +1014,8 @@ export default function BillApp() {
                     <div key={item.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 space-y-3">
                       <div className="flex items-center gap-2">
                         <span className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 text-sm font-black flex items-center justify-center shrink-0">{idx + 1}</span>
-                        <input id={`name-${item.id}`} type="text" placeholder="품명 (예: 하도 페인트)" value={item.name}
-                               className="input-style !py-3 flex-1 font-bold" onChange={e => updateItem(item.id, 'name', e.target.value)} />
+                        <input id={`name-${item.id}`} type="text" list="item-names" placeholder="품명 (예: 하도 페인트)" value={item.name}
+                               className="input-style !py-3 flex-1 font-bold" onChange={e => onItemName(item.id, e.target.value)} />
                         {items.length > 1 && (
                           <button onClick={() => setItems(items.filter(i => i.id !== item.id))} className="w-10 h-10 rounded-full text-slate-300 hover:text-red-500 hover:bg-red-50 text-xl" aria-label="항목 삭제">✕</button>
                         )}
@@ -1170,6 +1317,83 @@ export default function BillApp() {
         </div>
       )}
 
+      {/* ───────── 📂 견적서함: 지난 견적서 찾기·다시 보내기·복사·백업 ───────── */}
+      {showBox && (
+        <div id="box" className="fixed inset-0 z-[80] bg-gray-100 overflow-y-auto no-print">
+          <div className="sticky top-0 z-10 bg-white border-b shadow-sm px-4 py-3">
+            <div className="max-w-xl mx-auto flex items-center gap-3">
+              <h2 className="flex-1 text-xl font-black text-slate-900">📂 내 견적서함</h2>
+              <button id="btn-box-close" onClick={() => setShowBox(false)} className="px-4 py-3 rounded-xl bg-slate-900 text-white font-extrabold text-base">✕ 닫기</button>
+            </div>
+            <div className="max-w-xl mx-auto mt-3 relative">
+              <input id="box-search" type="search" value={boxQuery} onChange={e => setBoxQuery(e.target.value)}
+                     placeholder="🔍 이름이나 품목으로 찾기 (예: 홍길동, 하도)" className="input-style !pr-12" />
+              {boxQuery && <button onClick={() => setBoxQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full text-slate-400 text-xl" aria-label="검색어 지우기">✕</button>}
+            </div>
+          </div>
+
+          <div className="max-w-xl mx-auto p-4 space-y-4">
+            {history.length > 0 && !boxQuery && (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                  <p className="text-[14px] text-slate-500 font-bold">이번 달 견적</p>
+                  <p className="text-2xl font-black text-slate-900">{monthList.length}건</p>
+                </div>
+                <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                  <p className="text-[14px] text-slate-500 font-bold">이번 달 금액</p>
+                  <p className="text-xl font-black text-blue-700 truncate">{won(monthList.reduce((s, h) => s + h.total, 0))}</p>
+                </div>
+              </div>
+            )}
+
+            {history.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-6 text-center space-y-2">
+                <div className="text-5xl">🗂</div>
+                <p className="text-lg font-extrabold">아직 만든 견적서가 없어요</p>
+                <p className="text-[15px] text-slate-500">견적서를 만들면 여기에 자동으로 모여요.<br />다음엔 여기서 눌러서 바로 다시 보낼 수 있어요.</p>
+              </div>
+            ) : boxList.length === 0 ? (
+              <p id="box-empty" className="bg-white rounded-2xl border border-slate-200 p-6 text-center text-base text-slate-600">'{boxQuery}'(으)로 찾은 견적서가 없어요.<br />이름을 짧게 (예: 성만) 적어 보세요.</p>
+            ) : (
+              <>
+                <p className="text-[15px] text-slate-600 font-bold">{boxQuery ? `찾은 견적서 ${boxList.length}건` : `전체 ${boxList.length}건 · 최근 것부터`}</p>
+                {boxList.map(h => (
+                  <div key={h.id} className="box-item bg-white rounded-2xl border border-slate-200 p-4 space-y-3 shadow-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-lg font-black text-slate-900 truncate">{h.customer || '(받는 분 없음)'}</p>
+                        <p className="text-[14px] text-slate-500">{h.date.replace(/-/g, '.')} · No.{h.id.split('-')[1] || h.id}</p>
+                      </div>
+                      <p className="text-lg font-black text-blue-700 whitespace-nowrap">{won(h.total)}</p>
+                    </div>
+                    <p className="text-[15px] text-slate-700 bg-slate-50 rounded-xl px-3 py-2 truncate">
+                      {h.items.slice(0, 3).map(i => i.name).join(', ')}{h.items.length > 3 ? ` 외 ${h.items.length - 3}개` : ''}
+                    </p>
+                    <div className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                      <button onClick={() => reopenHistory(h)} className="box-reopen py-3 rounded-xl bg-[#FF7E36] text-white font-extrabold text-[15px]">📨 다시 보내기</button>
+                      <button onClick={() => loadHistory(h)} className="box-copy py-3 rounded-xl bg-blue-50 border-2 border-blue-200 text-blue-800 font-extrabold text-[15px]">✏️ 복사해서 새로</button>
+                      <button onClick={() => deleteHistory(h)} className="box-del w-12 rounded-xl bg-slate-50 text-slate-400 text-lg" aria-label="견적서 지우기">🗑</button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {/* 백업: 폰을 바꿔도 그대로 */}
+            <div id="backup-card" className="bg-white rounded-2xl border-2 border-amber-200 p-4 space-y-3">
+              <p className="text-base font-extrabold text-slate-900">📦 폰을 바꿔도 그대로 — 백업</p>
+              <p className="text-[15px] text-slate-600 leading-relaxed">견적서·사업자 정보·도장·자주 쓰는 품목은 <b>이 폰에만</b> 저장돼요. 한 달에 한 번 <b>백업 파일</b>을 저장해서 카톡 '나와의 채팅'에 보내 두세요.</p>
+              <div className="grid grid-cols-2 gap-2">
+                <button id="btn-backup" onClick={exportBackup} className="py-3 rounded-xl bg-amber-500 text-white font-extrabold text-base">💾 백업 저장</button>
+                <button id="btn-restore" onClick={() => backupInputRef.current?.click()} className="py-3 rounded-xl bg-white border-2 border-amber-300 text-amber-800 font-extrabold text-base">📥 백업 불러오기</button>
+              </div>
+              <input ref={backupInputRef} id="restore-file" type="file" accept=".json,application/json" className="hidden"
+                     onChange={e => { const f = e.target.files?.[0]; if (f) importBackup(f); e.target.value = ''; }} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSign && (
         <SignaturePad
           onClose={() => setShowSign(false)}
@@ -1184,10 +1408,14 @@ export default function BillApp() {
               <div className="text-5xl mb-2">✅</div>
               <h3 className="text-xl font-black text-slate-900">저장됐어요!</h3>
               <p className="text-[15px] text-slate-600 mt-2 whitespace-pre-line leading-relaxed">{doneMsg}</p>
+              <p className="text-[14px] text-slate-500 mt-2">이 견적서는 위쪽 <b>📂 견적서함</b>에 보관돼요. 다음에 눌러서 다시 보낼 수 있어요.</p>
             </div>
             <CoupangAd slot={1} title="💡 이런 상품도 많이 봐요" sub="오늘 주문하면 내일 도착" />
             {!standalone && !IS_TOSS && <p className="text-[14px] text-slate-500 text-center">다음엔 더 빨리 쓰려면 첫 화면의 <b>📱 바탕화면에 넣기</b>를 해 두세요.</p>}
-            <button onClick={() => setDoneMsg('')} className="w-full py-4 rounded-2xl bg-blue-600 text-white font-extrabold text-lg">확인</button>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => setDoneMsg('')} className="py-4 rounded-2xl bg-blue-600 text-white font-extrabold text-lg">확인</button>
+              <button id="btn-done-new" onClick={() => newQuote(false)} className="py-4 rounded-2xl bg-white border-2 border-blue-200 text-blue-700 font-extrabold text-lg">✚ 다음 견적서</button>
+            </div>
           </div>
         </div>
       )}
